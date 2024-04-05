@@ -1,0 +1,139 @@
+环境说明：
+11.11.1.210 k8smaster001
+11.11.1.211 k8smaster002
+11.11.1.212 k8smaster003
+
+11.11.1.220 k8snode001
+11.11.1.221 k8snode002
+11.11.1.222 k8snode003
+
+11.11.1.205 nfs_server
+11.11.1.206 harbor_server
+
+echo  "11.11.1.205 nfs_server">>/etc/hosts
+echo  "11.11.1.206 harbor_server">>/etc/hosts
+
+blkid 查看uuid
+
+mkdir /root/.ssh
+touch /root/.ssh/authorized_keys
+echo "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDiw9iuyzhVatGCvO/X4ameLUXW5EUScOQZSDbZWkoulweX5aFYvZHKpLxlvbUvgIJeZoD+F/M11SuyaR47irMB+jQObZPEZxTD9T4YM/jdiRjp3ztbD8LvhHF2eCXUwjAwzRknwfrmCy/RN0jAztjH2qbKuCD0oQR7wJgOQvVOVFWIEnn/q/vBEaunYYRmP5UK2j8hIMJdZIwf2YTHmAm+YJKyznJ0H8yIvXTsL/HoR8g6fxSrTOIc3uZRrKQEO5YYjJVdZr3AYp0fAdPf3gX3AZ+RsUMWIYAZTEVd4p6rlH4X9+bxSGp6v/ZzIEj7Orh5IV63SJ8ipyUxDcBVteNxaZZ9t157fSV73Zn8v6RYpG4zQ3AXoG3tjQok83HhWCq1HfH2231gFym4C29++duOQc26erqQdOiFGPQ6urlxMr0vE1TM7OkDO7DfGKGKFM3ieIT3d8VHOMs+RsPhBeM4RXyJac3L/zhkh+iyQO7hdMn7IEO3koXbQ+9nHhzBmcc= Administrator@DESKTOP-ROOV6SS" >>/root/.ssh/authorized_keys
+
+编辑网络配置文件 
+cd /etc/sysconfig/network-scripts
+vim /etc/sysconfig/network-scripts/ifcfg-ens33
+
+TYPE=Ethernet
+BOOTPROTO=static
+IPADDR="11.11.1.210"
+NETMASK="255.255.255.0"
+GATEWAY="11.11.1.1"
+DNS1="8.8.8.8"
+DNS2="114.114.114.114"
+NAME=ens33
+DEVICE=ens33
+ONBOOT=yes
+
+
+
+关闭Selinux 和 firewalld
+
+setenforce 0
+sed -i 's/SELINUX=enforcing/SELINUX=disabled/' /etc/selinux/config
+systemctl disable firewald
+systemctl stop firewalld
+
+设置主机名
+hostnamectl  set-hostname  k8smaster001
+hostnamectl  set-hostname  k8smaster002
+hostnamectl  set-hostname  k8smaster003
+
+hostnamectl  set-hostname  k8snode001
+hostnamectl  set-hostname  k8snode002
+hostnamectl  set-hostname  k8snode003
+
+
+编辑/etc/hosts
+cat  >> /etc/hosts <<EOF
+11.11.1.210 k8smaster001
+11.11.1.211 k8smaster002
+11.11.1.212 k8smaster003
+11.11.1.220 k8snode001
+11.11.1.221 k8snode002
+11.11.1.222 k8snode003
+11.11.1.205 nfs_server
+11.11.1.206 harbor_server
+EOF
+
+关闭swap
+swapoff -a 
+vi  /etc/fstab  #注释掉swap那行
+
+
+将桥接的ipv4流量传递到iptables链
+
+modprobe br_netfilter
+
+将内核参数写入配置文件
+cat > /etc/sysctl.d/k8s.conf << EOF
+net.bridge.bridge-nf-call-ip6tables = 1
+net.bridge.bridge-nf-call-iptables = 1
+net.ipv4.ip_forward = 1
+EOF
+
+使内核参数生效
+sysctl --system 
+
+打开端口转发
+echo "net.ipv4.ip_forward = 1"  >> /etc/sysctl.conf
+sysctl -p
+
+设置时间同步
+yum install -y chrony
+systemctl start chronyd
+systemctl enable chronyd
+
+
+安装containerd（6台机器都操作）
+
+yum install -y yum-utils  
+yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+yum install containerd.io -y --allowerasing
+systemctl enable containerd
+systemctl start containerd
+
+修改sandbox镜像地址
+containerd  config default > /etc/containerd/config.toml
+
+修改配置文件
+vi  /etc/containerd/config.toml  ##改如下内容
+sandbox_image = "registry.cn-hangzhou.aliyuncs.com/google_containers/pause:3.9"   # 修改为阿里云镜像地址
+SystemdCgroup = true   
+
+重启containerd服务
+systemctl restart containerd
+
+
+配置kubernetes仓库
+
+cat  > /etc/yum.repos.d/kubernetes.repo <<EOF
+[kubernetes]
+name=Kubernetes
+baseurl=https://mirrors.aliyun.com/kubernetes/yum/repos/kubernetes-el7-x86_64/
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=https://mirrors.aliyun.com/kubernetes/yum/doc/yum-key.gpg https://mirrors.aliyun.com/kubernetes/yum/doc/rpm-package-key.gpg
+EOF
+
+安装kubeadm和kubelet
+yum install -y kubelet-1.26.2  kubeadm-1.26.2  kubectl-1.26.2
+
+
+启动kubelet服务
+systemctl start kubelet.service
+systemctl enable kubelet.service
+
+
+设置crictl连接 containerd
+crictl config --set runtime-endpoint=unix:///run/containerd/containerd.sock

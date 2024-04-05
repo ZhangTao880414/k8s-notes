@@ -1,0 +1,33 @@
+所有机器执行
+
+yum install nfs-utils rpcbind -y
+
+sudo systemctl start rpcbind
+sudo systemctl start nfs-server
+sudo systemctl enable rpcbind
+sudo systemctl enable nfs-server
+
+
+11.11.1.205 nfs_server  上执行
+
+mkdir /home/nfs
+chmod 755 /home/nfs
+
+cat >> /etc/exports<<EOF
+/home/nfs *(rw,no_root_squash,no_all_squash,sync)
+EOF
+
+exportfs -r
+showmount -e 11.11.1.205
+
+
+所有需要时nfs的机器上执行 挂载命令
+mkdir /nfs-pv
+mount -t nfs 11.11.1.205:/nfs /nfs-pv
+
+卸载命令
+umount /nfs-pv
+
+
+
+注意： 关闭nfs服务器之前，需要先关闭使用nfs的服务器才行，否则会造成使用nfs的服务器关机/重启卡死
