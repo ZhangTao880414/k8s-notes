@@ -1,0 +1,49 @@
+环境：11.11.1.210 k8smaster001
+
+yum install -y epel-release
+yum update
+yum install ansible -y
+
+
+配置ansible：
+
+关闭ssh第一次链接 yes认证：
+官方配置： https://github.com/ansible/ansible/blob/stable-2.9/examples/ansible.cfg
+
+echo "host_key_checking = False" >>/etc/ansible/ansible.cfg
+echo "retry_files_enabled = False" >>/etc/ansible/ansible.cfg
+
+
+vim /etc/ansible/hosts
+
+[master]
+11.11.1.210
+11.11.1.211
+11.11.1.212
+
+[node]
+11.11.1.220
+11.11.1.221
+11.11.1.222
+
+
+[nfs]
+11.11.1.205
+
+[harbor]
+11.11.1.206
+
+[all]
+11.11.1.210
+11.11.1.211
+11.11.1.212
+11.11.1.220
+11.11.1.221
+11.11.1.222
+11.11.1.205
+11.11.1.206
+
+
+
+测试命令：
+ansible master -m command -a 'pwd'

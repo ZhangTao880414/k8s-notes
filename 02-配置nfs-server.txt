@@ -23,11 +23,15 @@ showmount -e 11.11.1.205
 
 所有需要时nfs的机器上执行 挂载命令
 mkdir /nfs-pv
-mount -t nfs 11.11.1.205:/nfs /nfs-pv
+mount -t nfs 11.11.1.205:/home/nfs /nfs-pv
 
 卸载命令
 umount /nfs-pv
 
 
+开机自动挂载NFS:编辑/etc/fstab方式
+vim /etc/fstab
+
+echo "111.11.1.205:/nfs /nfs-pv nfs defaults 0 0" >>/etc/fstab
 
 注意： 关闭nfs服务器之前，需要先关闭使用nfs的服务器才行，否则会造成使用nfs的服务器关机/重启卡死

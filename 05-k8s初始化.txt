@@ -1,0 +1,71 @@
+04中配置了高可用，vip为 11.11.1.219  所以初始化时指定 piserver-advertise-address=11.11.1.219
+
+1.2.4 初始化
+
+sudo kubeadm init --control-plane-endpoint "11.11.1.219:6443" --upload-certs --image-repository=registry.cn-hangzhou.aliyuncs.com/google_containers --kubernetes-version=v1.26.2  --service-cidr=10.15.0.0/16  --pod-network-cidr=10.18.0.0/16
+
+init失败需要清理环境：
+kubeadm reset -f
+iptables -F && iptables -t nat -F && iptables -t mangle -F && iptables -X
+
+modprobe br_netfilter
+sysctl --system 
+
+1）使用kubeadm初始化k8s（master001上操作）
+其要做的事情是将k8s核心的各个组件用容器的形式运行起来，包括aip-server、controller-manager等
+kubeadm init --image-repository=registry.cn-hangzhou.aliyuncs.com/google_containers --apiserver-advertise-address=11.11.1.219 --kubernetes-version=v1.26.2  --service-cidr=10.15.0.0/16  --pod-network-cidr=10.18.0.0/16
+
+其中有一段输出是这样的：
+kubeadm join 11.11.1.219:6443 --token 8nuvr7.mjx8p1ag1n8ra255 \
+        --discovery-token-ca-cert-hash sha256:dd9ce90e13116ad2221ef8726376fbb5f3e02cab37fe73feb4d026fe2b326879
+
+
+说明： 上面这条命令就是如果需要将node节点加入到集群需要执行的命令，这个token有效期为24小时，如果过期，可以使用下面命令获取
+kubeadm token create --print-join-command
+
+2）创建配置文件（101上操作）
+这个配置文件指的是，k8s管理员用户的相关配置，如果没有这个配置，我们是无法使用命令行工具去访问k8s里的资源对象的（如，pod、deployment、service等）
+mkdir -p $HOME/.kube
+cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+chown $(id -u):$(id -g) $HOME/.kube/config
+
+此时就可以执行如下命令来获取节点、pod信息了：
+kubectl get node   ##获取节点信息
+kubectl get pod --all-namespaces ##获取所有pod信息
+
+
+3）node节点加入master（102和103上操作）
+kubeadm join 11.11.1.219:6443 --token 8nuvr7.mjx8p1ag1n8ra255 --discovery-token-ca-cert-hash sha256:dd9ce90e13116ad2221ef8726376fbb5f3e02cab37fe73feb4d026fe2b326879
+
+
+3-1）master节点加入
+kubeadm join 11.11.1.219:6443 --token 8nuvr7.mjx8p1ag1n8ra255 --discovery-token-ca-cert-hash sha256:dd9ce90e13116ad2221ef8726376fbb5f3e02cab37fe73feb4d026fe2b326879 --control-plane --apiserver-advertise-address=11.11.1.219
+
+
+4）查看node信息（101上操作）
+kubectl get node  ##可以看到有三个节点
+
+
+
+1.2.5 安装网络插件（101上操作）
+此时k8s还不能正常工作，因为它的网络插件还未安装，各组件之间还不能正常通信，下面我们来安装calico网络插件
+
+1）下载部署calico的yaml文件
+curl https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/calico.yaml -O
+
+2）修改yaml文件
+修改该yaml文件中，定义网段的配置
+vim calico.yaml  ##找到如下内容
+# - name: CALICO_IPV4POOL_CIDR
+# value: "192.168.0.0/16"
+# 修改为：
+- name: CALICO_IPV4POOL_CIDR
+  value: "10.18.0.0/16"
+注意缩进
+
+3）部署caclico
+kubectl apply -f calico.yaml
+
+查看pod
+kubectl get pods -n kube-system
+等所有pod都是running状态才算正常

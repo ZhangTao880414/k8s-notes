@@ -1,0 +1,146 @@
+https://blog.csdn.net/wuhuayangs/article/details/125995743
+2台nginx上均执行：
+11.11.1.219  vip
+11.11.1.218 nginx01
+11.11.1.217 nginx02
+
+yum install nginx -y
+
+编辑配置文件：
+cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.bak
+echo ''> /etc/nginx/nginx.conf
+vim /etc/nginx/nginx.conf
+
+user nginx;
+worker_processes auto;
+error_log /var/log/nginx/error.log;
+pid /run/nginx.pid;
+include /usr/share/nginx/modules/*.conf;
+
+events {
+    worker_connections  1024;
+}
+# 添加这个
+stream {
+    # 日志格式
+    log_format  main  '$remote_addr $upstream_addr - [$time_local] $status $upstream_bytes_sent';
+        # 日志存放路径
+        access_log  /var/log/nginx/k8s-access.log  main;
+    # master 调度资源池
+    upstream k8s-apiserver {
+        server 11.11.1.210:6443;
+        server 11.11.1.211:6443;
+        server 11.11.1.212:6443;
+    }
+    server {
+        listen 6443;
+        proxy_pass k8s-apiserver;# 做反向代理到资源池
+    }
+}
+http {
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
+
+    log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
+                      '$status $body_bytes_sent "$http_referer" '
+                      '"$http_user_agent" "$http_x_forwarded_for"';
+
+    access_log  /var/log/nginx/access.log  main;
+
+    sendfile        on;
+    #tcp_nopush     on;
+
+    keepalive_timeout  65;
+
+    #gzip  on;
+
+    include /etc/nginx/conf.d/*.conf;
+}
+
+
+
+
+
+启动并设置开机启动
+sudo systemctl start nginx
+sudo systemctl enable nginx
+
+检查nginx状态
+sudo systemctl status nginx
+
+检查监听端口：
+netstat -natp | grep nginx  
+
+===
+安装keepalived 
+
+yum install  -y  keepalived 
+
+编辑配置文件
+cp /etc/keepalived/keepalived.conf /etc/keepalived/keepalived.conf.bak
+echo ''>/etc/keepalived/keepalived.conf 
+vim /etc/keepalived/keepalived.conf 
+
+global_defs {
+   # 接收邮件地址
+   notification_email {
+     acassen@firewall.loc
+     failover@firewall.loc
+     sysadmin@firewall.loc
+   }
+   # 邮件发送地址
+   notification_email_from Alexandre.Cassen@firewall.loc
+   smtp_server 127.0.0.1
+   smtp_connect_timeout 30
+   router_id NGINX_MASTER	#lb01节点的为 NGINX_MASTER，lb02节点的为 NGINX_BACKUP
+}
+
+#添加一个周期性执行的脚本
+vrrp_script check_nginx {
+    script "/etc/nginx/check_nginx.sh"	#指定检查nginx存活的脚本路径
+}
+
+vrrp_instance VI_1 {
+    state MASTER			#lb01节点的为 MASTER，lb02节点的为 BACKUP
+    interface ens33			#指定网卡名称 ens33
+    virtual_router_id 51	#指定vrid，两个节点要一致
+    priority 100			#指定 k8s-nginx01 节点的为 100，k8s-nginx02 节点的为 90
+    advert_int 1
+    authentication {
+        auth_type PASS
+        auth_pass 1111
+    }
+    virtual_ipaddress {
+        11.11.1.219/24	#指定 VIP
+    }
+    track_script {
+        check_nginx			#指定vrrp_script配置的脚本
+    }
+}
+
+
+创建 nginx 状态检查脚本
+vim /etc/nginx/check_nginx.sh
+
+#!/bin/bash
+#egrep -cv "grep|$$" 用于过滤掉包含grep 或者 $$ 表示的当前Shell进程ID
+count=$(ps -ef | grep nginx | egrep -cv "grep|$$")
+
+if [ "$count" -eq 0 ];then
+    systemctl stop keepalived
+fi
+
+chmod +x /etc/nginx/check_nginx.sh 
+
+启动keepalive： 注意：这里一定要先启动 nginx 服务，再启动 keepalived 服务
+systemctl start keepalived
+systemctl enable keepalived
+
+systemctl status keepalived
+
+
+
+
+
+
+
