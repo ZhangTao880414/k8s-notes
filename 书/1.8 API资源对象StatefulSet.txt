@@ -1,0 +1,239 @@
+1.8 API资源对象StatefulSet
+
+1.8.1 StatefulSet概述
+Pod根据是否有数据存储分为有状态和无状态：
+
+无状态：指的Pod运行期间不会产生重要数据，即使有数据产生，这些数据丢失了也不影响整个应用。比如Nginx、Tomcat等应用适合无状态。
+有状态：指的是Pod运行期间会产生重要的数据，这些数据必须要做持久化，比如MySQL、Redis、RabbitMQ等。
+
+Deployment和Daemonset适合做无状态，而有状态也有一个对应的资源，那就是Statefulset（简称sts）。
+StatefulSet 适用于需要保持持久状态、有序部署和稳定标识的应用程序，如数据库、分布式存储系统、消息队列等。
+通过使用 StatefulSet，可以确保这些有状态应用程序在 Kubernetes 集群中能够稳定、可靠地运行。和Deployment最大的差异在于，StatefulSet需要借助PersistentVolume，也就是持久化的存储来保证数据的数据不丢失。
+
+1.8.2 创建StorageClass
+由于StatefulSet涉及到了数据持久化，用到了StorageClass，需要先创建一个基于NFS的StorageClass。
+
+
+假设，这里已经准备好提供NFS服务的机器，IP为192.168.222.109，共享目录为/data/nfs。
+
+
+
+另外，要想使用NFS的sc，还需要安装一个NFS provisioner，它的作用是自动创建NFS的pv
+
+github地址： https://github.com/kubernetes-sigs/nfs-subdir-external-provisioner
+
+
+
+将源码下载下来：
+
+git clone https://github.com/kubernetes-sigs/nfs-subdir-external-provisioner
+
+
+
+首先创建相关的rbac授权
+
+cd nfs-subdir-external-provisioner/deploy
+
+sed -i 's/namespace: default/namespace: kube-system/' rbac.yaml  ##修改命名空间为kube-system
+
+kubectl apply -f rbac.yaml  ##创建rbac授权
+
+
+
+修改deployment.yaml
+
+sed -i 's/namespace: default/namespace: kube-system/' deployment.yaml ##修改命名空间为kube-system
+
+
+
+另外还需要修改下面一些内容（标红的部分）
+
+   spec:
+      serviceAccountName: nfs-client-provisioner
+      containers:
+        - name: nfs-client-provisioner
+          image: chronolaw/nfs-subdir-external-provisioner:v4.0.2  ##改为dockerhub地址
+          volumeMounts:
+            - name: nfs-client-root
+              mountPath: /persistentvolumes
+
+          env:
+            - name: PROVISIONER_NAME
+              value: k8s-sigs.io/nfs-subdir-external-provisioner
+            - name: NFS_SERVER
+              value: 192.168.222.109  ##nfs服务器地址
+            - name: NFS_PATH
+              value: /data/nfs  ##nfs共享目录
+      volumes:
+        - name: nfs-client-root
+          nfs:
+            server: 192.168.222.109  ##nfs服务器地址
+            path: /data/nfs  ##nfs共享目录
+
+
+
+部署
+
+kubectl apply -f deployment.yaml 
+
+kubectl apply -f class.yaml ##创建storageclass
+
+
+
+下面是StorageClass YAML的内容
+
+cat  class.yaml
+
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nfs-client  ##这个是StorageClass的名字，后面会用到
+provisioner: k8s-sigs.io/nfs-subdir-external-provisioner # 这个就是nfs provisioner的名字，在上面部署完之后，就可以看到该pod了
+parameters:
+  archiveOnDelete: "false"  ##自动回收存储空间
+
+
+
+1.8.3 StatefulSet YAML示例
+这里假设文件名为redis-sts.yaml
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis-sts
+spec:
+  serviceName: redis-svc ##这里要有一个serviceName，Sts必须和service关联
+  volumeClaimTemplates:
+  - metadata:
+      name: redis-pvc
+    spec:
+      storageClassName: nfs-client
+      accessModes:
+        - ReadWriteMany
+      resources:
+        requests:
+          storage: 500Mi
+  replicas: 2
+  selector:
+    matchLabels:
+      app: redis-sts
+  template:
+    metadata:
+      labels:
+        app: redis-sts
+
+    spec:
+      containers:
+      - image: redis:6.2
+        name: redis
+        ports:
+        - containerPort: 6379
+        volumeMounts:
+        - name: redis-pvc
+          mountPath: /data
+
+
+主要参数说明：
+
+serviceName: redis-svc：定义了 StatefulSet 关联的服务名称为 redis-svc。这个服务会被用于与 StatefulSet 中的 Pod 进行通信。
+volumeClaimTemplates： 定义了用于创建持久化存储卷的模板列表。
+- metadata：指定了持久化存储卷模板的元数据信息。
+name: redis-pvc：定义了持久化存储卷模板的名称为 redis-pvc。
+spec：定义了持久化存储卷模板的规格，包括了存储类、访问模式和存储资源等。
+storageClassName: nfs-client：指定了持久化存储卷的存储类为 nfs-client，这将决定存储卷的类型和所使用的存储后端。
+accessModes：指定了持久化存储卷的访问模式为 ReadWriteMany，表示可以被多个 Pod 同时读写。
+resources：定义了持久化存储卷所请求的存储资源大小为 500Mi。
+replicas: 2：指定了要创建的 Pod 的副本数量为 2，即在 StatefulSet 中运行的 Pod 实例数量。
+selector：指定了如何选择节点来运行 StatefulSet 中的 Pod。
+matchLabels：定义了节点选择器，要求节点的标签中必须含有 app: redis-sts。
+template：定义了要创建的 Pod 的模板。
+metadata：包含了 Pod 模板的元数据信息。
+labels：用于给 Pod 添加标签，这里定义了一个标签 app: redis-sts。
+spec：定义了 Pod 的规格，包括了容器的镜像、端口以及挂载的持久化存储卷等信息。
+containers：定义了要在 Pod 中运行的容器列表。
+- image: redis:6.2：定义了容器所使用的镜像为 redis:6.2，即 Redis 数据库的版本为 6.2。
+name: redis：定义了容器的名称为 redis。
+ports：定义了容器暴露的端口列表。
+- containerPort: 6379：定义了容器监听的端口号为 6379，这是 Redis 默认的端口号。
+volumeMounts:：定义了要挂载到容器内部的持久化存储卷。
+- name: redis-pvc：定义了持久化存储卷的名称为 redis-pvc。
+mountPath: /data：定义了持久化存储卷挂载到容器内部的路径为 /data，这意味着 Redis 数据库文件将会存储在 /data 目录下。
+
+
+1.8.4 StatefulSet的创建和删除
+还需要一个配套的Service，示例如下
+
+
+
+vi  redis-svc.yaml
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-svc
+spec:
+  selector:
+    app: redis-sts
+  ports:
+  - port: 6379
+    protocol: TCP
+    targetPort: 6379
+
+
+
+使用YAML创建StatefulSet：
+
+kubectl apply -f redis-sts.yaml -f redis-svc.yaml
+
+查看：
+kubectl get sts
+kubectl get po
+
+
+使用YAML删除sts：
+
+kubectl delete -f redis-sts.yaml -f redis-svc.yaml
+
+
+
+1.8.4 StatefulSet特点总结
+
+对于Sts的Pod，有如下特点：
+    ① Pod名固定有序，后缀从0开始；
+    ② “域名”固定，这个“域名”组成： Pod名.Svc名，例如 redis-sts-0.redis-svc；
+    ③ 每个Pod对应的PVC也是固定的；
+
+关于域名和数据持久化的小实验：
+ping 域名
+kubectl exec -it redis-sts-0 -- bash   
+进去可以ping redis-sts-0.redis-svc 和  redis-sts-1.redis-svc，是可以ping通的，说明Pod的域名格式为: Pod名.Svc名
+
+
+
+创建key
+kubectl exec -it redis-sts-0 -- redis-cli
+127.0.0.1:6379> set k1 'abc'
+OK
+127.0.0.1:6379> set k2 'bcd'
+OK
+说明：创建了两个key：k1和k2
+
+
+
+模拟故障
+kubectl delete pod redis-sts-0  ##把其中第一个pod删除掉
+
+删除后，它会自动重新创建同名Pod，再次进入查看redis key
+kubectl exec -it redis-sts-0 -- redis-cli
+127.0.0.1:6379> get k1
+"abc"
+127.0.0.1:6379> get k2
+"bcd"
+发现k1和k2的值依然存在，说明数据是做了持久化的。
+
+1.8.5 StatefulSet里的多个Pod之间的数据同步
+需要注意的是，K8s并不负责Sts里的Pod间数据同步， 具体的数据同步和一致性策略取决于我们部署的有状态应用程序。所以，请不要妄图借助k8s的sts做应用多Pod间的数据同步。
+
+
+
+不同的应用程序可能使用不同的数据同步和一致性策略。例如，关系型数据库（如 MySQL）可能使用主从复制，而分布式数据库（如 MongoDB）可能使用一种基于分区和副本的数据同步机制。

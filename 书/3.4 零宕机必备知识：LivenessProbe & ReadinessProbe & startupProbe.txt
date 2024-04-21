@@ -1,0 +1,155 @@
+在现代云原生应用领域，特别是在Kubernetes这样的容器编排系统中，确保应用的高可用性和稳定性是至关重要的。
+为了达到零宕机的目标，Kubernetes提供了三个关键的健康检查机制：LivenessProbe、ReadinessProbe和StartupProbe。
+这些探针机制构成了应用在生命周期内健康状态检测的基础，通过持续不断地监控容器内部服务的状态，及时识别和处理可能导致服务中断的问题。
+3.4.1 探针类型
+在Kubernetes中，LivenessProbe、ReadinessProbe和StartupProbe支持多种类型的探测方法，用于检查容器内部服务的不同健康状态。
+以下是各类探针支持的探测类型：
+HTTP GET 请求：
+通过发送HTTP GET请求到容器暴露的端口和路径来检查服务是否响应。如果收到的HTTP状态码属于200-399范围，则视为成功。
+
+TCP Socket：
+通过建立到容器指定端口的TCP连接来检查服务是否可达。如果能够建立连接，则视为成功。
+
+执行命令（Exec）：
+在容器内部执行一个命令（或一系列命令），如果命令执行返回0退出码，则视为成功。这种方法可用于运行任意Shell命令或脚本以检查服务状态。
+
+示例：
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: 8080
+  initialDelaySeconds: 30
+  periodSeconds: 10readinessProbe:
+  tcpSocket:
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 10startupProbe:
+  exec:
+    command:
+    - cat
+    - /tmp/app-initialized
+  failureThreshold: 30
+  periodSeconds: 10
+在这个示例中：
+LivenessProbe 使用了 HTTP GET 方式检查服务健康状况。
+ReadinessProbe 使用了 TCP Socket 方式检查端口是否打开。
+StartupProbe 使用了 Exec 方式执行一个命令来检查容器是否完成初始化。
+3.4.2 LivenessProbe（存活探针）
+LivenessProbe（存活探针）：这是一种健康检查机制，用于判断容器内的主进程是否仍然在正常运行。当LivenessProbe探测失败时，Kubernetes会认为容器已死并自动重启容器，以此防止出现僵死状态的容器继续占用资源却无法提供服务的情况。
+
+LivenessProbe配置示例（Nginx HTTP Get探针）
+apiVersion: apps/v1kind: Deploymentmetadata:
+  name: nginx-liveness-probespec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx-liveness
+  template:
+    metadata:
+      labels:
+        app: nginx-liveness
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.21.0
+        ports:
+        - containerPort: 80
+        livenessProbe:
+          httpGet:
+            path: / # 要探测的HTTP路径
+            port: 80 # 探测的端口号
+          initialDelaySeconds: 30 # 容器启动后延迟多久才开始执行第一次探测（给予容器足够时间启动）
+          periodSeconds: 10 # 探测间隔，每隔多少秒执行一次
+          failureThreshold: 3 # 连续失败多少次后才视为容器不健康并重启容器
+解释重点字段：
+livenessProbe.httpGet.path: 指定HTTP GET请求的URL路径，这里是应用根目录/。
+livenessProbe.httpGet.port: 指定要探测的端口，这里是Nginx服务的默认HTTP端口80。
+livenessProbe.initialDelaySeconds: 表示容器启动后延迟多长时间才开始执行第一个存活探针检查，用于确保应用有足够的启动时间。
+livenessProbe.periodSeconds: 设置探测周期，即每隔指定的秒数执行一次探针检查。
+livenessProbe.failureThreshold: 当探针连续失败次数达到这个阈值时，Kubernetes会认为容器不再存活并重启容器。
+3.4.3 ReadinessProbe（就绪探针）
+ReadinessProbe（就绪探针）：与LivenessProbe不同，ReadinessProbe主要关注容器是否准备好接受流量。当ReadinessProbe成功时，Kubernetes会将Pod标记为Ready状态，使其能够接收到来自Service的流量。反之，如果探针失败，Kubernetes会将Pod从Service的负载均衡池中剔除，避免将请求发送到尚未完全启动或正在恢复状态的容器。
+
+ReadinessProbe配置示例（Nginx HTTP Get探针）
+apiVersion: apps/v1kind: Deploymentmetadata:
+  name: nginx-readiness-probespec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx-readiness
+  template:
+    metadata:
+      labels:
+        app: nginx-readiness
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.21.0
+        ports:
+        - containerPort: 80
+        readinessProbe:
+          httpGet:
+            path: / # 要探测的HTTP路径
+            port: 80 # 探测的端口号
+          initialDelaySeconds: 5 # 容器启动后延迟多久才开始执行第一次就绪探针
+          periodSeconds: 10 # 探测间隔，每隔多少秒执行一次
+          successThreshold: 1 # 连续成功多少次后才认为容器就绪，可以接收流量
+解释重点字段：
+readinessProbe.httpGet.path 和 readinessProbe.httpGet.port: 与LivenessProbe类似，指定HTTP GET请求的URL路径和端口号。
+readinessProbe.initialDelaySeconds: 表示容器启动后延迟多久才开始执行第一个就绪探针检查。
+readinessProbe.periodSeconds: 同样是设置探测周期，定期执行探针检查。
+readinessProbe.successThreshold: 表示连续成功探测到这个阈值后，容器会被标记为就绪状态，从而可以接收来自Service的流量。
+3.4.3 StartupProbe（启动探针）
+StartupProbe（启动探针）：StartupProbe 是相对较新的探针类型，用于替代一些复杂场景下的 Init Containers，尤其针对那些启动过程较长的应用。
+它在容器启动初期运行，直到应用的主进程真正准备好接收请求为止。一旦StartupProbe成功，其他探针（如LivenessProbe和ReadinessProbe）才会开始生效，从而确保在应用初始化阶段不会过早地进行健康检查而导致不必要的容器重启。
+
+StartupProbe配置示例（假设Nginx有一个延迟加载的健康检查路径）
+apiVersion: apps/v1kind: Deploymentmetadata:
+  name: nginx-startup-probespec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx-startup
+  template:
+    metadata:
+      labels:
+        app: nginx-startup
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.21.0
+        ports:
+        - containerPort: 80
+        startupProbe:
+          httpGet:
+            path: /startup-check # 假设这是一个延迟加载的健康检查路径
+            port: 80
+          failureThreshold: 30 # 启动探针失败的最大次数
+          periodSeconds: 10 # 启动探针的检查间隔
+        livenessProbe:
+          httpGet:
+            path: / # 正常的LivenessProbe配置，待StartupProbe成功后启用
+            port: 80
+          initialDelaySeconds: 300 # 由于有了StartupProbe，此处LivenessProbe的启动延迟较大
+          periodSeconds: 10
+
+解释重点字段（StartupProbe）：
+startupProbe.httpGet.path 和 startupProbe.httpGet.port: 指定在容器启动初期要探测的HTTP路径和端口，这里假设有一个专门用于启动检查的路径/startup-check。
+startupProbe.failureThreshold 和 startupProbe.periodSeconds: 表示在容器启动后多久开始执行启动探针检查，以及探针失败的最大次数。只有当StartupProbe成功后，才会启用LivenessProbe和ReadinessProbe。
+
+注意：由于Nginx本身启动较快，一般不需要StartupProbe，这里仅作为示例讲解用途。在实际应用中，StartupProbe常常用于那些启动过程复杂、耗时较长的应用。
+3.4.4 总结
+Kubernetes 中的 LivenessProbe、ReadinessProbe 和 StartupProbe 是三个核心的健康检查探针，它们分别在容器生命周期的不同阶段起到关键作用，确保容器服务的稳定性和可用性。
+LivenessProbe（存活探针）：
+主要作用：检查容器主进程是否仍在正常运行，防止出现 “僵尸” 容器。
+功能：当LivenessProbe 探测失败时，Kubernetes 会认为容器已经死亡并自动重启容器，确保服务能够快速恢复。
+探测类型：支持HTTP GET、TCP Socket、Exec等方式。
+ReadinessProbe（就绪探针）：
+主要作用：确定容器是否准备好接受外部请求，影响Service何时将流量路由至容器。
+功能：当ReadinessProbe探测成功时，Kubernetes 会将 Pod 标记为 Ready 状态，此时 Pod 才能接收来自 Service 的流量；探测失败时，Pod 会被从Service 负载均衡列表中移除。
+探测类型：也支持HTTP GET、TCP Socket、Exec等方式。
+StartupProbe（启动探针）：
+主要作用：特别针对容器启动时间较长或初始化过程复杂的应用，判断容器是否完成启动。
+功能：在 StartupProbe 成功之前，Liveness和Readiness探针都不会生效，这样可以避免在应用启动阶段由于健康检查导致不必要的容器重启。
+探测类型：同样支持HTTP GET、TCP Socket、Exec等探测方式。
+通过配置恰当的 LivenessProbe、ReadinessProbe 和 StartupProbe，Kubernetes 能够对容器的整个生命周期进行全面、准确的健康检查，有效降低服务中断风险，实现零宕机运维的目标。

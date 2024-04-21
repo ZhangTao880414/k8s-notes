@@ -1,0 +1,122 @@
+配置黑白名单是为了做访问控制，允许或者不允许某些IP/IP段访问资源。在实现形式上分为两种：ConfigMap 和 Annotations。
+
+其中，Annotations只对指定的 ingress 生效，而ConfigMap是全局生效的，所以建议黑名单使用 ConfigMap 去配置，而白名单使用 Annotations 去配置。
+
+4.5.1 白名单
+
+写在 annotation 中：
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+ annotations:
+   nginx.ingress.kubernetes.io/whitelist-source-range: "192.10.192.16, 10.0.0.0/8"
+ name: nginx-ing
+spec:
+ ingressClassName: nginx
+ rules:
+   - host: nginx.kubernets.cn
+     http:
+       paths:
+         - pathType: Prefix
+           backend:
+             service:
+               name: svc-demo
+               port:
+                 number: 80
+           path: /
+在这个例子中，只有来自 192.10.192.16 和 10.0.0.0/8 网络范围内的客户端才能访问通过这个 Ingress 规则定义的服务。
+
+测试验证：
+
+# ip a |grep ens192 -A1
+2: ens192: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state UP group default qlen 1000
+   link/ether 00:0c:29:a8:03:b5 brd ff:ff:ff:ff:ff:ff
+   inet 192.10.192.16/24 brd 192.10.192.255 scope global noprefixroute ens192
+      valid_lft forever preferred_lft forever
+
+# curl nginx.kubernets.cn -I
+HTTP/1.1 200 OK
+Date: Thu, 14 Mar 2024 03:18:19 GMT
+Content-Type: text/html
+Content-Length: 612
+Connection: keep-alive
+Last-Modified: Tue, 21 Apr 2020 14:09:01 GMT
+ETag: "5e9efe7d-264"
+Accept-Ranges: bytes
+
+##非白名单list
+# ip a |grep ens192 -A1
+2: ens192: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state UP group default qlen 1000
+   link/ether 00:0c:29:22:23:7d brd ff:ff:ff:ff:ff:ff
+   inet 192.10.192.31/24 brd 192.10.192.255 scope global noprefixroute ens192
+      valid_lft forever preferred_lft forever
+
+# curl nginx.kubernets.cn -I
+HTTP/1.1 403 Forbidden
+Date: Thu, 14 Mar 2024 03:19:14 GMT
+Content-Type: text/html
+Content-Length: 146
+Connection: keep-alive
+也可以写固定 IP，也可以写网段。 配置到 ConfigMap 中：
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+ labels:
+   app.kubernetes.io/component: controller
+   app.kubernetes.io/instance: ingress-nginx
+   app.kubernetes.io/managed-by: Helm
+   app.kubernetes.io/name: ingress-nginx
+   app.kubernetes.io/part-of: ingress-nginx
+   app.kubernetes.io/version: 1.8.2
+   helm.sh/chart: ingress-nginx-4.7.2
+ name: ingress-nginx-controller
+ namespace: ingress-nginx
+data:
+ whitelist-source-range: 192.10.192.16/24
+4.5.2 黑名单
+ConfigMap 配置如下：
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+ labels:
+   app.kubernetes.io/component: controller
+   app.kubernetes.io/instance: ingress-nginx
+   app.kubernetes.io/managed-by: Helm
+   app.kubernetes.io/name: ingress-nginx
+   app.kubernetes.io/part-of: ingress-nginx
+   app.kubernetes.io/version: 1.8.2
+   helm.sh/chart: ingress-nginx-4.7.2
+ name: ingress-nginx-controller
+ namespace: ingress-nginx
+data:
+ whitelist-source-range: 192.10.192.16/24
+ block-cidrs: 192.10.192.100
+annotation 配置：
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+ annotations:
+   nginx.ingress.kubernetes.io/whitelist-source-range: "0.0.0.0/0"
+   nginx.ingress.kubernetes.io/configuration-snippet: |
+     if ($remote_addr ~ "^(10\.0\.0\.0|192\.168\.0\.0)"){
+       return 403;
+     }
+ name: nginx-ing
+spec:
+ ingressClassName: nginx
+ rules:
+   - host: nginx.kubernets.cn
+     http:
+       paths:
+         - pathType: Prefix
+           backend:
+             service:
+               name: svc-demo
+               port:
+                 number: 80
+           path: /
+在这个例子中，我们首先允许了所有IP地址 (0.0.0.0/0) 访问，然后使用了一个 Nginx 配置片段( configuration-snippet ) 来检查请求来源是否属于黑名单范围（这里是 10.0.0.0/8 和 192.168.0.0/16），如果是，则返回 403 Forbidden 错误码。

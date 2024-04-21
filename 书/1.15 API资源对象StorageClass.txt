@@ -1,0 +1,63 @@
+1.15.1 StorageClass概述
+在 K8s 中，PV可以手动创建，也可以自动创建，当PV需求量非常大时，如果靠手动创建PV就非常麻烦了。
+
+
+
+有一种可以实现自动创建PV，并且会将PVC和PV绑定的方案，那就是StorageClass（简称SC），SC是 Kubernetes 中用于动态分配持久化存储资源的重要机制，它提供了一种灵活、可扩展且与存储资源解耦的方式来管理持久化存储，适用于各种类型的应用场景。
+
+
+SC会定义两部分内容：
+pv的属性，比如存储类型、大小；
+创建该PV需要用到的存储插件（provisioner），这个provisioner是实现自动创建PV的关键。
+
+
+在1.8 API资源对象StatefulSet章节当中，我曾给大家演示过NFS的使用，其中就有StorageClass的使用。
+
+1.15.2 StorageClass YAML示例
+下面是一个基于NFS的SC YAML示例：
+
+apiVersion: storage.k8s.io/v1
+
+kind: StorageClass
+
+metadata:
+
+  name: nfs-storage
+
+provisioner: kubernetes.io/nfs
+
+parameters:
+
+  nfsServer: <NFS_SERVER_IP_OR_HOSTNAME>
+
+  nfsPath: /exported/path
+
+
+
+参数说明：
+
+provisioner：指定存储插件为 NFS，即 kubernetes.io/nfs。
+
+parameters：指定 NFS 的服务器地址和路径。nfsServer 指定 NFS 服务器的 IP 地址或主机名，nfsPath 指定 NFS 服务器上共享的路径。
+
+
+
+1.15.3 使用StorageClass
+
+要使用StorageClass，我们还需要创建一个与之匹配的 PersistentVolumeClaim（PVC），只需要指定 storageClassName 为 nfs-storage即可绑定，如下所示：
+
+
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: my-nfs-pvc
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: nfs-storage
+  resources:
+    requests:
+      storage: 1Gi
+
+说明：创建PVC my-nfs-pvc，将其绑定到了 nfs-storage 的 StorageClass 上。它请求了 1GB 的存储空间，并且指定了访问模式为 ReadWriteMany，以支持多个 Pod 同时对该存储进行读写操作。

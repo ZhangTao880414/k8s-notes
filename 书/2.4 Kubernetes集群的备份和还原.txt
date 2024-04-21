@@ -1,0 +1,103 @@
+2.4.1 K8s集群备份和恢复概述
+这里所谓的集群备份指的是备份K8s集群本身，以及运行在集群里面的各种资源对象（比如Deploy、Pod、Svc、ConfigMap等），但并不包含集群内部运行的各个应用的数据。比如，它并不会备份K8s里运行的MySQL、Redis等有状态应用里运行的数据。
+
+
+
+K8s使用的数据库为etcd，它主要用来存储集群的元数据，也就是说集群里运行了几个Pod，Pod基于什么镜像，这些数据是存储到了etcd里。所以，我们要备份集群，只需要备份etcd的数据即可。
+
+
+
+同样地，恢复集群的话，也只需要恢复etcd数据即可。但，有一点需要注意，恢复的前提是，需要有一个基础环境的，比如备份之前集群有多少个节点，你恢复之前也要保证有同样的基础环境。
+
+2.4.2 etcd数据库备份和恢复
+1）获取二进制etcdctl文件
+由于我们是使用kubeadm部署，机器上没有etcdctl命令，所以需要下载个二进制包
+
+先获取对应的版本：
+
+kubectl -n kube-system  exec -it $(kubectl get po -n kube-system |grep etcd- |head -1|awk '{print $1}') -- etcd --version
+
+
+然后下载合适的包（假设etcd版本为3.5.7，如果你的版本不是3.5.7，请改为合适的版本）：
+
+wget https://github.com/etcd-io/etcd/releases/download/v3.5.7/etcd-v3.5.7-linux-amd64.tar.gz
+
+解压
+tar zxf etcd-v3.5.7-linux-amd64.tar.gz -C /opt/
+
+将可执行文件软链到/bin/下
+ln -s /opt/etcd-v3.5.7-linux-amd64/etcdctl /bin/
+
+2）备份（需要在一个master上执行）
+无论是单节点etcd还是集群模式，都一样
+mkdir -p /opt/etcd_backup/
+ETCDCTL_API=3 etcdctl \
+snapshot save /opt/etcd_backup/snap-etcd-$(date +%F-%H-%M-%S).db \
+--endpoints=https://127.0.0.1:2379 \
+--cacert=/etc/kubernetes/pki/etcd/ca.crt \
+--cert=/etc/kubernetes/pki/etcd/server.crt \
+--key=/etc/kubernetes/pki/etcd/server.key
+
+
+如果不是kubeadm形式部署，例如手动部署etcd，并且有自己的ssl证书（假设证书路径/etc/etcd/ssl），则备份命令有所差异：
+
+mkdir -p /opt/etcd_backup/
+ETCDCTL_API=3 etcdctl \
+snapshot save /opt/etcd_backup/snap-etcd-$(date +%F-%H-%M-%S).db \
+--endpoints=https://192.168.222.101:2379 \
+--cacert=/etc/etcd/ssl/ca.pem \
+--cert=/etc/etcd/ssl/server.pem \
+--key=/etc/etcd/ssl/server-key.pem
+
+3）恢复--单节点etcd
+为了验证效果，可以在恢复之前删除掉测试的deployment
+kubectl delete deploy testdp
+
+停掉kube-apiserver和etcd Pod
+mv /etc/kubernetes/manifests/ /etc/kubernetes/manifests_bak  ##将目录改名，就会自动停掉
+
+挪走现有etcd相关数据
+mv /var/lib/etcd/  /var/lib/etcd_bak
+
+恢复etcd数据
+ETCDCTL_API=3 /opt/etcd-v3.5.7-linux-amd64/etcdutl snapshot restore /opt/etcd_backup/snap-etcd-2024-03-14-15-40-01.db --data-dir=/var/lib/etcd  ##/var/lib/etcd/目录会自动生成
+
+启动kube-apiserver和etcd Pod
+mv /etc/kubernetes/manifests_bak  /etc/kubernetes/manifests  #目录挪回去，服务会自动起来
+
+此时，查看删除掉的Pod
+kubectl get po  ##刚被删除的deployment已经有了
+
+4）恢复--集群模式etcd
+说明：该模式为三个master，并且三个etcd分布在三个master上
+
+因为备份的时候，只在其中一个master上操作，所以恢复时需要将备份文件拷贝到另外两台机器，并且将etcd相关二进制文件也拷贝过去
+scp /opt/etcd_backup/snap-etcd-2024-03-14-15-40-01.db  master02:/tmp/
+scp /opt/etcd_backup/snap-etcd-2024-03-14-15-40-01.db  master03:/tmp/
+scp -r /opt/etcd-v3.5.7-linux-amd64/  master02:/opt/etcd-v3.5.7-linux-amd64/
+scp -r /opt/etcd-v3.5.7-linux-amd64/  master03:/opt/etcd-v3.5.7-linux-amd64/
+
+停掉kube-apiserver和etcd Pod（三个master上都操作）
+mv /etc/kubernetes/manifests/ /etc/kubernetes/manifests_bak  ##将目录改名，就会自动停掉
+
+
+挪走现有etcd相关数据（三个master上都操作）
+
+mv /var/lib/etcd/  /var/lib/etcd_bak
+
+三个节点分别恢复
+master01上恢复etcd数据
+ETCDCTL_API=3 /opt/etcd-v3.5.7-linux-amd64/etcdutl snapshot restore /opt/etcd_backup/snap-etcd-2024-03-14-15-40-01.db --data-dir=/var/lib/etcd --name master01 --initial-cluster="master01=https://192.168.222.101:2380,master02=https://192.168.222.102:2380,master03=https://192.168.222.103:2380" --initial-advertise-peer-urls="https://192.168.222.101:2380"
+
+master02上恢复etcd数据
+ETCDCTL_API=3 /opt/etcd-v3.5.7-linux-amd64/etcdutl snapshot restore /tmp/snap-etcd-2024-03-14-15-40-01.db --data-dir=/var/lib/etcd --name master02 --initial-cluster="master01=https://192.168.222.101:2380,master02=https://192.168.222.102:2380,master03=https://192.168.222.103:2380" --initial-advertise-peer-urls="https://192.168.222.102:2380"
+
+
+master03上恢复etcd数据
+
+ETCDCTL_API=3 /opt/etcd-v3.5.7-linux-amd64/etcdutl snapshot restore /tmp/snap-etcd-2024-03-14-15-40-01.db --data-dir=/var/lib/etcd --name master03 --initial-cluster="master01=https://192.168.222.101:2380,master02=https://192.168.222.102:2380,master03=https://192.168.222.103:2380" --initial-advertise-peer-urls="https://192.168.222.103:2380"
+
+
+启动kube-apiserver和etcd Pod（三台机器上都操作）
+
+mv /etc/kubernetes/manifests_bak  /etc/kubernetes/manifests  #目录挪回去，服务会自动起来

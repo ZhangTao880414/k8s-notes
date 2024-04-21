@@ -1,0 +1,289 @@
+Ingress-nginx 提供了对 Kubernetes 中服务进行灰度发布（金丝雀发布）的能力，这允许在将新版本的服务逐步引入生产环境的同时保持旧版本的稳定运行，并通过控制流量分配比例来评估新版本的表现。
+金丝雀发布策略可以基于多种方式来划分流量，如客户端 IP、Header 或 Cookie 等标识符，或者直接按照服务权重。
+4.7.1 Nginx Annotations Canary 规则
+nginx.ingress.kubernetes.io/canary-by-header：基于 Request Header 的流量切分，适用于灰度发布以及 A/B 测试。当 Request Header 设置为 always时，请求将会被一直发送到 Canary 版本；当 Request Header 设置为 never时，请求不会被发送到 Canary 入口；对于任何其他 Header 值，将忽略 Header，并通过优先级将请求与其他金丝雀规则进行优先级的比较。
+
+nginx.ingress.kubernetes.io/canary-by-header-value：要匹配的 Request Header 的值，用于通知 Ingress 将请求路由到 Canary Ingress 中指定的服务。当 Request Header 设置为此值时，它将被路由到 Canary 入口。该规则允许用户自定义 Request Header 的值，必须与上一个 annotation (即：canary-by-header）一起使用。
+
+nginx.ingress.kubernetes.io/canary-weight：基于服务权重的流量切分，适用于蓝绿部署，权重范围 0 - 100 按百分比将请求路由到 Canary Ingress 中指定的服务。权重为 0 意味着该金丝雀规则不会向 Canary 入口的服务发送任何请求。权重为 100 意味着所有请求都将被发送到 Canary 入口。
+
+nginx.ingress.kubernetes.io/canary-by-cookie：基于 Cookie 的流量切分，适用于灰度发布与 A/B 测试。用于通知 Ingress 将请求路由到 Canary Ingress 中指定的服务的cookie。当 cookie 值设置为 always时，它将被路由到 Canary 入口；当 cookie 值设置为 never时，请求不会被发送到 Canary 入口；对于任何其他值，将忽略 cookie 并将请求与其他金丝雀规则进行优先级的比较。 定义两个版本的代码。
+
+4.7.2 需求设定
+以下是一个基于 nginx.ingress.kubernetes.io/canary 和 nginx.ingress.kubernetes.io/canary-weight 注解实现金丝雀发布的例子：
+
+假设我们有一个已部署在 Kubernetes 集群中的应用，它有一个稳定的生产版本（blue），现在我们要部署一个新的版本（green），并希望将一部分流量引导到新的 green 版本以进行测试和验证。
+
+
+例子主要通过 nginx 的不同版本来进行测试验证！
+
+##v1版本
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+ name: nginx-v1
+spec:
+ replicas: 1
+ selector:
+   matchLabels:
+     app: nginx
+     version: v1
+ template:
+   metadata:
+     labels:
+       app: nginx
+       version: v1
+   spec:
+     containers:
+     - name: nginx
+       image: "openresty/openresty:centos"
+       ports:
+       - name: http
+         protocol: TCP
+         containerPort: 80
+       volumeMounts:
+       - mountPath: /usr/local/openresty/nginx/conf/nginx.conf
+         name: config
+         subPath: nginx.conf
+     volumes:
+     - name: config
+       configMap:
+         name: nginx-v1
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+ labels:
+   app: nginx
+   version: v1
+ name: nginx-v1
+data:
+ nginx.conf: |-
+   worker_processes  1;
+   events {
+       accept_mutex on;
+       multi_accept on;
+       use epoll;
+       worker_connections  1024;
+   }
+   http {
+       ignore_invalid_headers off;
+       server {
+           listen 80;
+           location / {
+               access_by_lua '
+                   local header_str = ngx.say("nginx-v1")
+               ';
+           }
+       }
+   }
+---
+apiVersion: v1
+kind: Service
+metadata:
+ name: nginx-v1
+spec:
+ type: ClusterIP
+ ports:
+ - port: 80
+   protocol: TCP
+   name: http
+ selector:
+   app: nginx
+   version: v1
+---
+##v2版本
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+ name: nginx-v2
+spec:
+ replicas: 1
+ selector:
+   matchLabels:
+     app: nginx
+     version: v2
+ template:
+   metadata:
+     labels:
+       app: nginx
+       version: v2
+   spec:
+     containers:
+     - name: nginx
+       image: "openresty/openresty:centos"
+       ports:
+       - name: http
+         protocol: TCP
+         containerPort: 80
+       volumeMounts:
+       - mountPath: /usr/local/openresty/nginx/conf/nginx.conf
+         name: config
+         subPath: nginx.conf
+     volumes:
+     - name: config
+       configMap:
+         name: nginx-v2
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+ labels:
+   app: nginx
+   version: v2
+ name: nginx-v2
+data:
+ nginx.conf: |-
+   worker_processes  1;
+   events {
+       accept_mutex on;
+       multi_accept on;
+       use epoll;
+       worker_connections  1024;
+   }
+   http {
+       ignore_invalid_headers off;
+       server {
+           listen 80;
+           location / {
+               access_by_lua '
+                   local header_str = ngx.say("nginx-v2")
+               ';
+           }
+       }
+   }
+---
+apiVersion: v1
+kind: Service
+metadata:
+ name: nginx-v2
+spec:
+ type: ClusterIP
+ ports:
+ - port: 80
+   protocol: TCP
+   name: http
+ selector:
+   app: nginx
+   version: v2
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+ name: nginx-ing
+ namespace: default
+spec:
+ ingressClassName: nginx
+ rules:
+ - host: nginx.kubernets.cn
+   http:
+     paths:
+     - backend:
+         service:
+           name: nginx-v1
+           port:
+             number: 80
+       path: /
+       pathType: Prefix
+4.7.3 基于 Header 数据的流量切分
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+ annotations:
+   nginx.ingress.kubernetes.io/canary: "true"
+   nginx.ingress.kubernetes.io/canary-by-header: "Region"
+   nginx.ingress.kubernetes.io/canary-by-header-pattern: "sh|sz"
+ name: nginx-canary
+ namespace: default
+spec:
+ ingressClassName: nginx
+ rules:
+   - host: nginx.kubernets.cn
+     http:
+       paths:
+         - pathType: Prefix
+           backend:
+             service:
+               name: nginx-v2
+               port:
+                 number: 80
+           path: /
+测试访问：
+
+##正常访问
+# curl nginx.kubernets.cn
+nginx-v1
+
+##细带Header头数据
+# curl -H "Region: sh" nginx.kubernets.cn
+nginx-v2
+4.7.4 基于服务权重的流量切分
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+ annotations:
+   nginx.ingress.kubernetes.io/canary: "true"
+   nginx.ingress.kubernetes.io/canary-weight: "30"
+ name: nginx-canary
+ namespace: default
+spec:
+ ingressClassName: nginx
+ rules:
+   - host: nginx.kubernets.cn
+     http:
+       paths:
+         - pathType: Prefix
+           backend:
+             service:
+               name: nginx-v2
+               port:
+                 number: 80
+           path: /
+测试验证：
+
+# for i in {1..10}; do curl -H "Region: sh" nginx.kubernets.cn; done;
+nginx-v1
+nginx-v1
+nginx-v1
+nginx-v2
+nginx-v1
+nginx-v1
+nginx-v1
+nginx-v2
+nginx-v2
+nginx-v1
+4.7.5 基于客户端来源IP的流量切分
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+ annotations:
+   nginx.ingress.kubernetes.io/canary: "true"
+   nginx.ingress.kubernetes.io/canary-by-header: "X-Forwarded-For"
+   # 假设客户端来源IP为123.123.123.123
+   nginx.ingress.kubernetes.io/canary-by-header-value: "123.123.123.123"
+ name: nginx-canary
+ namespace: default
+spec:
+ ingressClassName: nginx
+ rules:
+   - host: nginx.kubernets.cn
+     http:
+       paths:
+         - pathType: Prefix
+           backend:
+             service:
+               name: nginx-v2
+               port:
+                 number: 80
+           path: /
+测试访问：
+
+##正常访问
+# curl nginx.kubernets.cn
+nginx-v1
+
+##细带Header头数据
+# curl -H "X-Forwarded-For: 123.123.123.123" nginx.kubernets.cn
+nginx-v2
+4.7.6 总结
+Ingress-nginx 提供的常见高级功能包括如上给大家讲到的这些功能，同时还允许用户通过ConfigMap自定义扩展Nginx配置以应对各种复杂场景需求，广泛应用于提升日常运维效率和服务稳定性保障。

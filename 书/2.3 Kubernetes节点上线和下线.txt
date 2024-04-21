@@ -1,0 +1,185 @@
+2.3.1 节点上线和下线概述
+这里说的节点指的是work节点，当应用数量越来越多，之前的集群不能支撑时，就需要靠增加work节点来承载更大的量。相应的，当某一台work节点需要退役或者缩减资源时，也会下线指定work节点。
+
+
+
+下面就来看看如何平滑地上线和下线work节点。
+
+
+2.3.2 新节点上线
+其实上线一个新节点，就是要重新部署一个work node，然后让它加入到集群即可。
+
+
+1）准备工作
+① 关闭Selinux 和 firewalld
+
+临时关闭Selinux： 
+
+setenforce 0 
+
+永久关闭Selinux： 
+sed -i 's/SELINUX=enforcing/SELINUX=disabled/' /etc/selinux/config
+
+关闭firewalld： 
+systemctl disable firewald;  systemctl stop firewalld
+
+② 设置主机名
+
+hostnamectl  set-hostname  aminglinux04  
+
+编辑/etc/hosts
+cat  >> /etc/hosts <<EOF
+192.168.222.101 aminglinux01
+192.168.222.102 aminglinux02
+192.168.222.103 aminglinux03
+192.168.222.104 aminglinux04
+EOF
+
+③ 关闭swap
+
+临时关闭： 
+
+swapoff -a 
+
+永久关闭： 
+vi  /etc/fstab  #注释掉swap那行
+
+④ 将桥接的ipv4流量传递到iptables链
+
+生成bridge相关内核参数
+
+modprobe br_netfilter  
+
+将内核参数写入配置文件
+cat > /etc/sysctl.d/k8s.conf << EOF
+net.bridge.bridge-nf-call-ip6tables = 1
+net.bridge.bridge-nf-call-iptables = 1
+net.ipv4.ip_forward = 1
+EOF
+
+使内核参数生效
+sysctl --system 
+
+
+⑤ 打开端口转发
+
+echo "net.ipv4.ip_forward = 1"  >> /etc/sysctl.conf
+
+sysctl -p
+
+
+
+⑥ 设置时间同步
+
+yum install -y chrony
+
+systemctl start chronyd
+systemctl enable chronyd
+
+
+2）安装containerd（三台机器都操作）
+① 配置yum 仓库
+安装yum-utils工具
+yum install -y yum-utils  
+
+配置Docker官方的yum仓库
+yum-config-manager \
+    --add-repo \
+    https://download.docker.com/linux/centos/docker-ce.repo
+
+② yum安装containerd
+yum install containerd.io -y
+
+
+③ 启动containerd服务
+
+systemctl enable containerd
+
+systemctl start containerd
+
+④ 修改sandbox镜像地址
+
+先生成默认配置文件
+
+containerd  config default > /etc/containerd/config.toml
+
+修改配置文件
+vi  /etc/containerd/config.toml  ##改如下内容
+sandbox_image = "registry.cn-hangzhou.aliyuncs.com/google_containers/pause:3.9"   # 修改为阿里云镜像地址
+SystemdCgroup = true   
+
+重启containerd服务
+systemctl restart containerd
+
+3）安装kubeadm和kubelet
+配置kubernetes仓库
+
+cat  > /etc/yum.repos.d/kubernetes.repo <<EOF
+
+[kubernetes]
+
+name=Kubernetes
+baseurl=https://mirrors.aliyun.com/kubernetes/yum/repos/kubernetes-el7-x86_64/
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=https://mirrors.aliyun.com/kubernetes/yum/doc/yum-key.gpg https://mirrors.aliyun.com/kubernetes/yum/doc/rpm-package-key.gpg
+EOF
+
+说明：kubernetes用的是RHEL7的源，和8是通用的
+
+安装kubeadm和kubelet
+
+yum install -y kubelet-1.26.4  kubeadm-1.26.4  kubectl-1.26.4
+
+
+
+启动kubelet服务
+
+systemctl start kubelet.service
+
+systemctl enable kubelet.service
+
+
+4）设置crictl连接 containerd
+crictl config --set runtime-endpoint=unix:///run/containerd/containerd.sock
+
+5）到master节点上，获取join token
+kubeadm token create --print-join-command
+6）到新节点，加入集群
+kubeadm join 192.168.222.101:6443 --token uzopz7.ryng3lkdh2qwvy89 --discovery-token-ca-cert-hash sha256:1a1fca6d1ffccb4f48322d706ea43ea7b3ef2194483699952178950b52fe2601
+
+
+7）master节点上查看node信息
+kubectl get node
+
+
+2.3.3 节点下线
+
+1）下线之前，先创建一个测试Deployment
+命令行创建deployment，指定Pod副本为7
+
+kubectl create deployment testdp2 --image=nginx:1.23.2 --replicas=7
+
+查看Pod
+kubectl get po -o wide
+
+
+说明：为了达到测试效果，需要保证至少有一个Pod副本运行在即将要下线的节点上。
+
+
+
+注意：以下步骤全部都在aminglinux01也就是master上执行：
+
+2）驱逐下线节点上的Pod，并设置不可调度
+kubectl drain aminglinux04  --ignore-daemonsets
+
+3）恢复可调度
+kubectl uncordon  aminglinux04
+
+4）移除节点
+kubectl delete node  aminglinux04
+
+
+5）再次查看测试Deployment
+kubectl get po -o wide  ##观察pod变化

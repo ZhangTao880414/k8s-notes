@@ -1,0 +1,126 @@
+3.7 Kubernetes服务质量QoS
+2024.03.27
+|
+34 次学习
+包含该课程的还有
+k8s极简修炼手册
+7期更新
+
+随着云计算技术的快速发展，容器化已经成为现代微服务架构中的主流实践。作为容器编排领域的翘楚，Kubernetes 以其强大的自动化能力、灵活性和可扩展性赢得了广大开发者的青睐。
+
+然而，在分布式系统中，保障应用程序的服务质量（Quality of Service, QoS）是一项至关重要的任务。
+
+Kubernetes 内置的 QoS 机制，就是为了在资源受限的情况下优化 Pod 的调度和运行，以期实现更高程度的服务稳定性、可靠性和资源利用率。
+
+3.7.1 QoS了解
+
+在 Kubernetes 中，QoS（Quality of Service）是一种资源管理策略，用于根据Pod的需求和容器的行为对其优先级进行分类，确保在资源不足时，优先保护关键服务的运行。
+Kubernetes 通过分析 Pod 的资源请求（requests）和限制（limits）来决定 Pod 的 QoS 类别，共分为三大类：
+1）Guaranteed：Pod 的所有容器都指定了内存和CPU的请求值，并且请求值等于限制值。这类Pod享有最高级别的资源保障，Kubernetes会尽全力确保其资源需求得到满足。
+
+2）Burstable：Pod 的容器至少有一个资源（内存或CPU）指定了请求值，但请求值与限制值不相等。这类Pod在资源充足时可以获得比请求更多的资源，而在资源紧张时可能会被剥夺超过请求量的部分资源。
+
+3）BestEffort：Pod 的所有容器都没有明确指定资源请求和限制。这类Pod在资源分配上没有保障，仅能使用未被其他Pod申请的剩余资源。
+3.7.2 实战应用
+下面针对上面这三个类别分别来进行实战。
+
+3.7.2.1 Guaranteed QoS 类型
+在Guaranteed QoS 类型下，Pod必须为其所有的资源（如CPU和内存）同时设置请求值（requests）和限制值（limits），且两者相等。
+下面是一个创建Guaranteed QoS 类型Nginx Deployment的例子：
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+ name: nginx-guaranteed
+spec:
+ replicas: 1
+ selector:
+   matchLabels:
+     app: nginx-guaranteed
+ template:
+   metadata:
+     labels:
+       app: nginx-guaranteed
+   spec:
+     containers:
+     - name: nginx
+       image: nginx:1.21.0
+       resources:
+         limits:
+           cpu: 100m
+           memory: 100Mi
+         requests:
+           cpu: 100m
+           memory: 100Mi
+       ports:
+       - containerPort: 80
+在这个示例中，Nginx容器的CPU请求和限制均为 100m（即0.1核），内存请求和限制均为 100Mi（即100兆字节）。
+由于请求和限制相同，Kubernetes会将此类Pod归类为Guaranteed QoS。
+3.7.2.2 Burstable QoS 类型
+Burstable QoS 类型的Pod至少对一种资源设置了请求值，但请求值和限制值不完全相等。以下是一个Burstable QoS 类型的Nginx Deployment示例：
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+ name: nginx-burstable
+spec:
+ replicas: 1
+ selector:
+   matchLabels:
+     app: nginx-burstable
+ template:
+   metadata:
+     labels:
+       app: nginx-burstable
+   spec:
+     containers:
+     - name: nginx
+       image: nginx:1.21.0
+       resources:
+         limits:
+           cpu: 200m
+           memory: 200Mi
+         requests:
+           cpu: 100m
+           memory: 100Mi
+       ports:
+       - containerPort: 80
+在这个示例中，Nginx容器的CPU请求为 100m，限制为 200m；内存请求为100Mi，限制为 200Mi。
+由于至少有一种资源的请求和限制不相等，因此Pod被归类为Burstable QoS。
+验证：
+
+# kubectl describe po nginx-burstable-6966974cc7-4qtsj |grep "QoS Class"
+QoS Class:                   Burstable
+3.7.2.3 BestEffort QoS 类型
+BestEffort QoS 类型的 Pod 不设置任何资源请求和限制。
+但由于实践中强烈建议为所有 Pod 设置资源请求以更好地进行资源调度，下面的示例实际上并不常见。
+若要创建一个 BestEffort QoS 类型的 Pod，可以直接省略资源部分，但出于最佳实践考虑，这里仍给出一个设置了请求但未设置限制的示例，表明它实质上是一个Burstable QoS Pod：
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+ name: nginx-besteffort
+spec:
+ replicas: 1
+ selector:
+   matchLabels:
+     app: nginx-besteffort
+ template:
+   metadata:
+     labels:
+       app: nginx-besteffort
+   spec:
+     containers:
+     - name: nginx
+       image: nginx:1.21.0
+       # 注意：BestEffort 类型通常不设置任何资源请求和限制
+       # 但为了突出显示区别，这里仅设置了请求值
+       resources:
+         requests:
+           cpu: 100m
+           memory: 100Mi
+       ports:
+       - containerPort: 80
+在实际情况中，若完全不设置资源请求和限制，Kubernetes 也会将此类 Pod 归类为 BestEffort QoS，但这并不是推荐的做法，因为这样 Pod 无法得到有效的资源保证和服务质量。
+3.7.3 总结
+
+
+Kubernetes 的 QoS 机制在容器编排和资源管理中起着至关重要的作用，它通过对 Pod 进行分类，这样集群在资源紧张的情况下能够更加智能地管理和优化资源分配。
+通过合理设定Pod的资源请求和限制，确保关键服务的 Guaranteed 级别，不仅可以有效避免服务中断，提升系统稳定性，还能在有限的资源池中最大化资源利用率，从而为实现零宕机运维奠定坚实基础。

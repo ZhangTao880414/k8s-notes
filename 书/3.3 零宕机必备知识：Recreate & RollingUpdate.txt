@@ -1,0 +1,122 @@
+在云原生时代，Kubernetes 作为容器编排领域的领导者，为我们提供了高效、可靠的部署策略，确保应用在更新过程中尽可能接近零宕机时间。本篇文章将聚焦于Kubernetes中两种核心的部署策略——Recreate 和 RollingUpdate，它们在保障应用平稳升级、最小化服务中断方面扮演了关键角色。
+
+3.3.1 Recreate更新策略
+Kubernetes 先终止当前版本中的所有容器，然后在旧容器删除时同时启动所有新容器，不会有 2 种版本容器同时运行，这对服务使用者来说更简单。
+
+
+优点：不存在新老版本共存；
+
+缺点：可能存在服务某段时间服务不可用；
+
+特点：所有容器集一起Terminating，一起Pending，一起ContainerCreating，一起Running。
+
+场景：当发布到开发/测试环境的时候，重建或者滚动更新通常是一个不错的选择。
+
+3.3.2 RollingUpdate更新策略
+Deployment控制器的滚动更新操作并非在同一个ReplicaSet控制器对象下删除并创建Pod资源，而是将它们分置于两个不同的控制器之下：旧控制器的Pod对象数量不断减少的同时，新控制器的Pod对象数量不断增加，直到旧控制器不再拥有Pod对象，而新控制器的副本数量变得完全符合期望值为止；
+优点：不存在某段时间内服务不可用；
+缺点：切换过程中，存在pod新老版本共存；
+特点：默认是滚动更新，缺省是滚动更新（核心参数↓）；
+maxUnavailable：滚动升级时允许的最大unavailable的pod数量，可以是整数或者百分比（默认25%）,这个值越小，越能保证服务稳定，更新越平滑；
+maxSurge：滚动升级时先启动的pod数量，可以是整数或者百分比（默认25%），这个值调的越大，副本更新速度越快；
+场景：在生产环境，滚动更新发布比较合适，但是新版本的提前测试是非常有必要的。
+
+
+3.3.4 测试验证
+3.3.4.1、Recreate 策略示例
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+ name: nginx-recreate-deployment
+spec:
+ replicas: 3
+ strategy:
+   type: Recreate
+ selector:
+   matchLabels:
+     app: nginx-recreate
+ template:
+   metadata:
+     labels:
+       app: nginx-recreate
+   spec:
+     containers:
+     - name: nginx
+       image: nginx:1.19.0 # 假设这是老版本
+       ports:
+       - containerPort: 80
+---
+
+# 更新 Deployment 时更改镜像版本
+kubectl set image deployment/nginx-recreate-deployment nginx=nginx:1.21.0 --record
+
+在这个例子中，我们创建了一个名为 nginx-recreate-deployment 的 Deployment，它使用了 Recreate 策略。
+
+当更新镜像版本时，Kubernetes 会一次性删除所有旧的 Pod，并立即创建基于新镜像的新 Pod。
+
+在此过程中，服务会有短暂的中断，直到所有新的 Pod 都已启动并准备就绪。
+
+Recreate 策略小结：
+
+定义：重建部署是最简单的发布策略
+
+部署方式：先停止并删除旧版本容器，再创建并启动新版本容器，部署中会导致应用程序短暂不可用
+
+适用场景：无需保证应用持续可用，例如开发环境
+
+
+
+3.3.4.2 RollingUpdate 策略示例
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+ name: nginx-rolling-update-deployment
+spec:
+ replicas: 3
+ strategy:
+   type: RollingUpdate
+   rollingUpdate:
+     maxUnavailable: 1
+     maxSurge: 1
+ selector:
+   matchLabels:
+     app: nginx-rolling-update
+ template:
+   metadata:
+     labels:
+       app: nginx-rolling-update
+   spec:
+     containers:
+     - name: nginx
+       image: nginx:1.19.0 # 假设这是初始版本
+       ports:
+       - containerPort: 80
+---
+
+# 更新 Deployment 时更改镜像版本
+kubectl set image deployment/nginx-rolling-update-deployment nginx=nginx:1.21.0 --record
+
+在这个例子中，我们创建了一个名为 nginx-rolling-update-deployment 的 Deployment，它使用了 RollingUpdate 策略。
+当我们更新镜像版本时，Kubernetes 会按照 maxUnavailable 和 maxSurge 的设置逐步替换 Pod，始终保持至少2个 Pod（因为总共有3个副本，maxUnavailable 设置为1）在线提供服务，从而减少了服务中断的时间。
+在这个配置中，每次只会替换一个 Pod，并且在替换过程中最多只会增加一个额外的 Pod。这样，服务在更新过程中可以保持连续性，减小了用户体验影响。
+RollingUpdate 策略小结：
+定义：滚动更新是一种逐步替换旧容器的策略
+部署方式：逐步将新版本的容器添加到集群中，同时逐步删除旧版本的容器
+适用场景：确保应用程序持续可用
+
+
+
+3.3.5 总结
+无论是 Recreate 还是 RollingUpdate 策略，都有其适用的场景和局限性。选择哪种策略取决于您的业务需求、服务中断容忍度以及对服务连续性的要求。
+
+
+
+Recreate策略：适用于不需要连续服务的场景，或是短时间内能承受完整服务停摆的应用更新。
+
+
+
+RollingUpdate策略：更适合对连续性要求较高的服务，通过逐步替换Pod来降低服务中断的风险，力求做到近乎零宕机的更新体验。
+
+
+
+在实际运维过程中，理解并灵活运用这两种部署策略，无疑能够显著提升云原生环境下的应用更新效率和业务连续性。

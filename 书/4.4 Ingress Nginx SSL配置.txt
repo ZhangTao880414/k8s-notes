@@ -1,0 +1,68 @@
+SSL配置是很常见的日常需求，下面来看看Ingress Nginx里如何配置。
+
+4.4.1 生成自建证书
+
+在这儿我们拿自建证书来完成实验，真正生产环境是需要通过正规渠道（比如阿里云）去购买SSL证书的。
+
+# openssl req -x509 -nodes -days 3650 -newkey rsa:2048 -keyout tls.key -out tls.crt -subj "/CN=nginx.kubernets.cn"
+将证书文件以secrets形式存储
+
+# kubectl create secret tls ca-secret --cert=tls.crt --key=tls.key
+4.4.2 部署Deploy 和 Service
+如果前面的实验中已经部署过，则不用再次部署
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+ name: svc-demo
+spec:
+ replicas: 2
+ selector:
+   matchLabels:
+     app: myapp
+ template:
+   metadata:
+     labels:
+       app: myapp
+   spec:
+     containers:
+     - image: nginx:1.18.0
+       name: svc-demo
+       ports:
+       - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+ name: svc-demo
+spec:
+ selector:  
+   app: myapp
+ ports:
+ - targetPort: 80  # 后端Pod的端口
+   port: 80 # 服务要暴露的端口
+4.4.3 配置Ingress添加TLS证书
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+ name: nginx-ing
+spec:
+ ingressClassName: nginx
+ rules:
+   - host: nginx.kubernets.cn
+     http:
+       paths:
+         - pathType: Prefix
+           backend:
+             service:
+               name: svc-demo
+               port:
+                 number: 80
+           path: /
+ tls:
+ - hosts:
+   - nginx.kubernets.cn
+   secretName: ca-secret
+验证：
+
+浏览器里访问地址 https://nginx.kubernets.cn:30318

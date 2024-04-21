@@ -1,0 +1,101 @@
+1.16.1 NetworkPolicy概述
+K8s里的NetworkPolicy用来控制Pod与Pod之间的网络通信，它也支持针对Namespace进行限制。基于白名单模式，符合规则的对象通过，不符合的拒绝。
+应用场景举例：
+Pod A不能访问Pod B；
+开发环境所有Pod不能访问测试命名空间；
+提供对外访问时，限制外部IP；
+1.16.2 YAML示例
+下面是一个官方提供的YAML示例：
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: test-network-policy
+  namespace: default
+spec:
+  podSelector:
+    matchLabels:
+      role: db
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 172.17.0.0/16
+            except:
+              - 172.17.1.0/24
+        - namespaceSelector:
+            matchLabels:
+              project: myproject
+        - podSelector:
+            matchLabels:
+              role: frontend
+      ports:
+        - protocol: TCP
+          port: 6379
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 10.0.0.0/24
+      ports:
+        - protocol: TCP
+          port: 5978
+
+
+参数说明：
+
+必需字段：apiVersion、 kind 和 metadata 字段。
+podSelector：定义目标Pod的匹配标签，即哪些Pod会生效此策略；
+policyTypes：表示给定的策略是应用于目标Pod的入站流量（Ingress）还是出站流量（Egress），或两者兼有。 如果NetworkPolicy未指定policyTypes则默认情况下始终设置Ingress。
+ingress：定义入流量限制规则，from用来定义白名单对象，比如网段、命名空间、Pod标签，Ports定义目标端口。
+egress：定义出流量限制规则，定义可以访问哪些IP和端口
+
+
+1.16.3 案例实践
+
+需求：aming命名空间下所有Pod可以互相访问，也可以访问其他命名空间Pod，但其他命名空间不能访问aming命名空间Pod。
+
+
+
+1）首先创建3个Pod：
+kubectl run busybox --image=busybox -- sleep 3600  ## default命名空间里创建busybox Pod
+kubectl run busybox --image=busybox -n aming -- sleep 3600    ## aming命名空间里创建busybox Pod
+kubectl run web --image=nginx:1.23.2 -n aming  ## aming命名空间里创建web pod
+
+
+2）在没有创建NetworkPolicy的情况下测试
+kubectl exec busybox -n aming -- ping 10.18.235.161  ##aming命名空间的busybox ping default命名空间的busybox IP 
+kubectl exec busybox -n aming -- ping 10.18.235.162 ##aming命名空间的busybox ping aming命名空间的web IP
+kubectl exec busybox -- ping 10.18.235.162 ##default命名空间的busybox ping aming命名空间的web IP
+说明：在没有任何NetworkPolicy的情况下，所有Pod之间是互相ping通的
+
+
+3）创建networkpolicy的YAML
+
+vi  deny-all-namespaces.yaml
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-all-namespaces
+  namespace: aming
+spec:
+  podSelector: {}  # 为空，表示匹配本命名空间所有Pod
+  policyTypes:
+  - Ingress
+  ingress:
+    - from:
+      - podSelector: {}  # 为空，表示匹配该命名空间所有Pod，即允许该命名空间所有Pod访问，没有定义namespaceSelector，也就是说不允许其它namespace的Pod访问。
+
+应用此YAML
+
+kubectl apply -f deny-all-namespaces.yaml
+
+
+
+4）测试连通性
+kubectl exec busybox -n aming -- ping 10.18.235.161  ##aming命名空间的busybox ping default命名空间的busybox IP
+kubectl exec busybox -n aming -- ping 10.18.235.162 ##aming命名空间的busybox ping aming命名空间的web IP
+kubectl exec busybox -- ping 10.18.235.162 ##default命名空间的busybox ping aming命名空间的web IP
+说明： aming命名空间的两个Pod之间是通的，但是aming命名空间的Pod和default命名空间的Pod之间是不通的。

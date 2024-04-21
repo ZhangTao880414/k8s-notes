@@ -1,0 +1,36 @@
+在 Kubernetes 集群中，Ingress Nginx 作为一个流行的Ingress控制器，假如公司有域名变更的需求，但是之前的网站依旧是有部分流量，这对于服务迁移、域名更改、SEO优化等场景有一定的需求。
+
+通过对 Ingress 资源进行特定的配置，可以实现从一个域名或路径重定向到另一个域名或路径。
+
+4.3.1 需求
+
+假设有这样一个需求：我们希望将所有的流量从 nginx.kubernets.cn 永久重定向到 www.baidu.com。我们可以使用 Ingress Nginx 的nginx.ingress.kubernetes.io/permanent-redirect 注解来实现这个需求。
+首先，确保已有一个空的或者是占位符的 Service（由于此处我们只是做重定向，所以无需实际指向后端业务服务）：
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+ name: nginx-ing
+ annotations:
+   nginx.ingress.kubernetes.io/permanent-redirect: https://www.baidu.com
+spec:
+ ingressClassName: nginx
+ rules:
+   - host: nginx.kubernets.cn
+     http:
+       paths:
+         - pathType: Prefix
+           backend:
+             service:
+               name: svc-demo
+               port:
+                 number: 80
+           path: /
+4.3.2 测试验证
+# curl nginx.kubernets.cn:30318 -I
+HTTP/1.1 301 Moved Permanently
+Date: Wed, 13 Mar 2024 11:24:38 GMT
+Content-Type: text/html
+Content-Length: 162
+Connection: keep-alive
+Location: https://www.baidu.com
+可以看到已经状态码未301，并且跳转到了www.baidu.com.

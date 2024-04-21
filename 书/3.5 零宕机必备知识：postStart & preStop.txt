@@ -1,0 +1,68 @@
+在 Kubernetes 的容器生命周期管理中，除了健康检查探针（LivenessProbe、ReadinessProbe和StartupProbe）之外，PostStart 和 PreStop Hooks也是实现零宕机运维的重要工具。
+
+3.5.1 PostStart Hook（启动后钩子）
+PostStart Hook 在容器启动后立即执行，但并不等待其完成。这个钩子非常适合执行初始化任务，如加载数据、启动辅助进程、设置环境变量等。
+
+以下是一个简单的 PostStart Hook 示例，演示如何在Nginx容器启动后执行一个自定义脚本：
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+ name: nginx-poststart-hook
+spec:
+ replicas: 1
+ selector:
+   matchLabels:
+     app: nginx-poststart
+ template:
+   metadata:
+     labels:
+       app: nginx-poststart
+   spec:
+     containers:
+     - name: nginx
+       image: nginx:1.21.0
+       ports:
+       - containerPort: 80
+       lifecycle:
+         postStart:
+           exec:
+             command: ["/bin/sh", "-c", "echo 'Container started' && /usr/local/bin/init.sh"]
+在上述示例中，我们定义了一个 PostStart Hook，当 Nginx 容器启动后，会执行 /bin/sh -c 命令，打印一条提示信息并执行 init.sh 脚本，这个脚本可以包含任何必要的启动后初始化逻辑。
+
+3.5.2 PreStop Hook（停止前钩子）
+PreStop Hook 则在容器即将被终止前执行，为容器提供一个优雅关闭的机会。
+
+这对于需要在终止前进行清理工作、保存状态、通知其他服务等场景非常有用。
+
+以下是一个 PreStop Hook 的 Nginx示例：
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+ name: nginx-prestop-hook
+spec:
+ replicas: 1
+ selector:
+   matchLabels:
+     app: nginx-prestop
+ template:
+   metadata:
+     labels:
+       app: nginx-prestop
+   spec:
+     containers:
+     - name: nginx
+       image: nginx:1.21.0
+       ports:
+       - containerPort: 80
+       lifecycle:
+         preStop:
+           exec:
+             command: ["/bin/sh", "-c", "sleep 5 && echo 'Container is shutting down...' && /usr/local/bin/cleanup.sh"]
+在这个示例中，我们配置了一个 PreStop Hook，当容器收到终止信号时，将会执行 /bin/sh -c 命令，首先休眠5秒（给予应用足够时间处理剩余请求），然后打印一条消息，并执行cleanup.sh脚本，用于进行优雅关闭的必要操作。
+
+3.5.3 总结
+总结来说，PostStart Hook 和 PreStop Hook 为 Kubernetes 容器提供了灵活的扩展点，可以让开发者能够在容器启动和终止的关键时刻插入自定义逻辑，这对于实现零宕机运维至关重要。
+
+通过充分利用这些生命周期钩子，可以确保服务在滚动更新、扩容缩容、故障转移等场景下的平滑过渡和稳定运行。

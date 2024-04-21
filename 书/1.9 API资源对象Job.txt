@@ -1,0 +1,103 @@
+1.9.1 Job概述
+K8s中的Job可以理解成一次性运行后就退出的Pod。 它主要用于运行一次性任务，这些任务在完成后即退出，不会持续运行。例如，数据备份、定时清理等任务都可以使用 Job 来管理。
+
+1.9.2 Job YAML示例
+先来生成一个YAML文件：
+
+
+kubectl create job job-demo --image=busybox  --dry-run=client  -o yaml > job-demo.yaml
+
+
+编辑此YAML文件
+
+vi job-demo.yaml  
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: job-demo
+spec:
+  template:  ##模板，基于此模板来创建pod，它用来定义pod的属性，比如container
+    spec:
+      restartPolicy: OnFailure ##定义Pod运行失败时的策略，可以是OnFailure和Never，其中OnFailure表示失败的话需要重启容器，Never表示失败的话不重启容器，而是重新生成一个新的Pod
+      containers:
+      - image: busybox
+        name: job-demo
+        command: ["/bin/echo"]
+        args: ["hellow", "world"]
+
+
+主要参考说明
+
+template：定义了要创建的 Pod 的模板。
+
+spec：定义了 Pod 的规格，包括了容器的配置、重启策略等。
+
+restartPolicy: OnFailure：定义了 Pod 的重启策略为 OnFailure，表示如果 Pod 失败（即退出代码非 0），则重新启动 Pod。其他可选值还包括 Never，表示永远不会重启 Pod。
+
+containers：定义了要在 Pod 中运行的容器列表。
+
+ - image: busybox：定义了容器所使用的镜像为 busybox，这是一个轻量级的 Linux 发行版，常用于测试和调试。
+
+name: job-demo：定义了容器的名称为 job-demo。
+
+command: ["/bin/echo"]：定义了容器执行的命令为 /bin/echo，表示执行 echo 命令。
+
+args: ["hello", "world"]：定义了传递给命令的参数，这里是两个参数 "hello" 和 "world"。因此，该容器将执行的命令为 /bin/echo hello world，输出 "hello world"。
+
+
+
+1.9.3 Job创建和删除
+
+
+创建Job
+
+kubectl apply -f job-demo.yaml
+
+查看Job
+kubectl get job,pod
+可以看到该容器运行完成后状态就变成了Completed。
+
+
+删除Job
+
+kubectl delete -f job-demo.yaml
+
+
+
+1.9.4 Job几个特殊参数
+
+对于Job，还有几个特殊参数：
+activeDeadlineSeconds，设置 Pod 运行的超时时间。
+backoffLimit，设置 Pod 的失败重试次数。
+completions，Job 完成需要运行多少个 Pod，默认是 1 个。
+parallelism，它与 completions 相关，表示允许并发运行的 Pod 数量，避免过多占用资源。
+
+
+定义一个新的YAML，并用上如上字段
+
+vi  myjob.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sleep-job
+spec:
+  activeDeadlineSeconds: 15   #15s就超时
+  backoffLimit: 2  #失败重试2次就放弃
+  completions: 4  #要运行4个pod，才算完成
+  parallelism: 2  #允许并发运行2个pod
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - image: busybox
+        name: echo-job
+        imagePullPolicy: IfNotPresent
+        command:
+          - sh
+          - -c
+          - sleep 10; echo done
+
+创建job，并查看job情况
+kubectl apply -f myjob.yaml  
+kubectl get pod -w  ##观察Pod数量以及状态的变化

@@ -1,0 +1,128 @@
+2.2.1 为什么要版本升级
+任何软件都有版本的概念，大版本、次版本、修订版本。比如我们安装的k8s版本为1.27.4，那么这个1就是大版本号，27是次版本号，而4则是修订版本号。
+
+版本的存在，意味着不同时间段的用户使用的版本不一样。那么是不是新版本出来就一定要升级到最新版本呢？
+
+
+当然不是，升级版本的场景主要有如下几点：
+
+为了使用新功能
+当前版本存在bug
+当前版本存在安全漏洞
+
+
+万不得已的情况下，谁也不愿意大费周章地去做升级。因为升级意味着要有变更，变更就意味着会发生潜在的问题，轻则导致某个功能不好用，重则导致丢失数据。
+
+
+
+
+2.2.2 k8s升级注意事项
+如果我们不得不升级k8s版本，那一定要注意以下几个方面：
+
+1）k8s不支持跨版本升级（这个跨版本指的是主要版本和次要版本，比如1.24.2，其中1为主要版本，24为次要版本，2为修订版本） 
+
+示例:
+
+1.20.2 -->  1.21.4  支持
+
+1.20.2 -->  1.22.3  不支持
+
+1.25.0 --> 1.25.4  支持
+
+
+2） 升级前做备份，谁也无法保证万无一失，多做一些保障工作总是没错的。
+
+
+3） 升级前拿测试环境做演练，为了避免不必要的潜在问题，最好是拿一个测试环境做做演练，提前趟趟坑，是非常有必要的。
+
+2.2.3 k8s升级流程
+
+为了让升级更加顺畅，需要提前把升级流程搞清楚，可以从以下两个维度来看：
+
+
+
+1）从Node层面看
+先升级Master k8s01（如果有多个Master，需要一台一台升级） --> 再升级Worker节点k8s02和k8s03
+
+
+
+2）从软件、组件层面看
+升级kubeadm --> 节点执行drain操作  --> 升级各组件（apiserver, coredns,  kube-proxy, controller-manager, scheduler等）--> 取消drain --> 升级kubelet和kubectl
+
+
+2.2.4 k8s升级步骤
+说明：接下来我们将 1.26.2 升级到 1.27.4
+1）升级Master
+查看可升级版本
+yum list --showduplicates kubeadm
+
+升级kubeadm
+yum install kubeadm-1.27.4-0  ##需要指定版本号
+
+驱逐Master上的Pod
+kubectl drain aminglinux01 --ignore-daemonsets
+
+查看集群是否能够升级
+kubeadm upgrade plan
+
+
+执行升级
+
+kubeadm upgrade apply v1.27.4
+
+升级kubelet和kubectl
+yum install -y kubelet-1.27.4-0  kubectl-1.27.4-0
+
+
+重启kubelet
+systemctl daemon-reload  
+systemctl restart kubelet
+
+
+恢复调度，上线
+kubectl uncordon aminglinux01
+
+
+2）升级work第一个节点
+升级kubeadm（aminglinux02上执行）
+yum install kubeadm-1.27.4-0  ##需要指定版本号
+
+驱逐aminglinux02上的Pod（aminglinux01上执行）
+kubectl drain aminglinux02 --ignore-daemonsets --delete-emptydir-data
+
+升级kubelet配置（aminglinux02上执行）
+kubeadm upgrade node
+
+升级kubelet和kubectl（aminglinux02上执行）
+yum install -y kubelet-1.27.4-0  kubectl-1.27.4-0
+
+重启kubelet（aminglinux02上执行）
+systemctl daemon-reload  
+systemctl restart kubelet
+
+恢复调度，上线（aminglinux01上执行）
+kubectl uncordon aminglinux02
+
+3） 升级Work第二个节点
+升级kubeadm（aminglinux03上执行）
+yum install kubeadm-1.27.4-0  ##需要指定版本号
+
+
+驱逐aminglinux02上的Pod（aminglinux01上执行）
+
+kubectl drain aminglinux03 --ignore-daemonsets --delete-emptydir-data
+
+升级kubelet配置（aminglinux03上执行）
+kubeadm upgrade node
+
+升级kubelet和kubectl（aminglinux03上执行）
+yum install -y kubelet-1.27.4-0  kubectl-1.27.4-0
+
+重启kubelet（aminglinux03上执行）
+systemctl daemon-reload  
+systemctl restart kubelet
+
+恢复调度，上线（aminglinux01上执行）
+kubectl uncordon aminglinux03
+
+如果有其它Node，继续模仿上面的3）操作即可。

@@ -1,0 +1,64 @@
+1.12.1 什么是ConfigMap
+在 K8s 中，ConfigMap（简称cm） 是一种用于存储非敏感信息（如配置文件、环境变量、运行参数、文件路径等）的 API 资源对象。它允许将配置数据与应用程序分离，以实现更好的可维护性和可移植性。
+
+
+与应用程序解耦：将配置信息存储在 ConfigMap 中可以使应用程序与配置信息解耦，使得应用程序可以更加灵活地部署和管理，同时也降低了配置信息泄露的风险。
+与 Pod 的关联：ConfigMap 可以被多个 Pod 共享，可以通过卷挂载或环境变量的方式将 ConfigMap 中的数据注入到 Pod 中，从而使得 Pod 中的应用程序可以使用配置信息。
+支持动态更新：在 Kubernetes 1.14 版本之后，ConfigMap 支持动态更新，即可以在不重启 Pod 的情况下更新 ConfigMap 中的数据，从而使得应用程序能够即时获取最新的配置信息。
+
+
+
+1.12.2 ConfigMap YAML示例
+假设YAML文件名为 mycm.yaml
+vi  mycm.yaml  
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mycm
+
+## 以下为具体的数据信息
+
+data:
+  DATABASE: 'db'
+  USER: 'wp'
+  PASSWORD: '123456'
+  ROOT_PASSWORD: '123456'
+
+1.12.3 ConfigMap创建和使用
+
+
+创建cm
+kubectl apply -f mycm.yaml
+
+查看cm
+kubectl get cm
+kubectl describe cm mycm
+
+
+创建测试Pod
+
+vi testpod.yaml
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: testpod
+  labels:
+    app: testpod
+spec:
+  containers:
+  - image: mariadb:10
+    name: maria
+    imagePullPolicy: IfNotPresent
+    ports:
+    - containerPort: 3306
+    envFrom:   ##将cm里的字段全部导入该pod
+    - prefix: 'MARIADB_'  ##将导入的字段名前面自动加上前缀，例如MARIADB_DATABASE， MARIADB_USER
+      configMapRef:  ##定义哪个cm
+        name: mycm
+
+
+验证：
+kubectl exec -it testpod -- bash  ##进入pod，查看变量$MARIADB_DATABASE
+

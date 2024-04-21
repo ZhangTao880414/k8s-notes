@@ -1,0 +1,133 @@
+1.14.1 PV和PVC概述
+在 K8s 中，PV（PersistentVolume）和 PVC（PersistentVolumeClaim）是用于持久化存储的两个重要概念。它们允许将持久化存储资源抽象出来，并与 Pod 分离，从而实现了存储和计算的解耦。
+
+
+PV 是 K8s 中用于表示持久化存储资源的对象。它可以是集群中的任何一种存储资源，例如 NFS、iSCSI、Ceph、GlusterFS 等。PV 是由集群管理员手动创建和管理的，它具有独立于 Pod 和命名空间的生命周期。
+
+
+
+PV 通常包含存储的容量、访问模式（例如只读或读写）、存储类、持久化存储的位置等信息。
+
+
+
+PVC 是 Pod 对 PV 请求的一种抽象。它是 Pod 请求持久化存储的方式，类似于 Pod 请求 CPU 或内存资源一样。PVC 描述了 Pod 对存储的需求，包括容量、访问模式等。
+
+
+
+PVC 通常与 Pod 相关联，它由开发人员创建并与 Pod 绑定。当 Pod 需要持久化存储时，它会创建一个 PVC 并将其与相应的 PV 绑定，以满足对持久化存储的需求。
+1.14.2 PV 和PVC YAML示例
+1）创建一个测试PV YAML：
+
+vi  testpv.yaml  
+
+
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: testpv
+
+spec:
+  storageClassName: test-storage
+  accessModes:
+  - ReadWriteOnce
+  capacity:
+    storage: 500Mi  ##提供500Mi空间
+  hostPath:
+    path: /tmp/testpv/  ##该目录需要存在，建议在所有节点上手动创建好此目录
+
+
+参数说明：
+
+ storageClassName:  定义存储类名称，PV和PVC中都会有该字段，目的是为了方便两者匹配绑定在一起。这个StorageClass也是一个资源对象，下一小节会介绍。
+
+  accessModes：定义该pv的访问权限模式，有三种：
+
+ReadWriteOnce：存储卷可读可写，但只能被一个节点上的 Pod 挂载;
+ReadOnlyMany：存储卷只读不可写，可以被任意节点上的 Pod 多次挂载;
+ReadWriteMany：存储卷可读可写，也可以被任意节点上的 Pod 多次挂载;
+  capacity： 定义该存储大小。
+
+  hostPath： 定义该存储访问路径，这里指的是本地的磁盘。
+
+
+
+2）创建一个测试的PVC YAML
+
+vi testpvc.yaml
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: testpvc
+
+spec:
+  storageClassName: test-storage
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Mi  ##期望申请100Mi空间
+
+
+1.14.3 PV和PVC创建和使用
+创建PV和PVC
+
+kubectl apply -f testpv.yaml -f testpvc.yaml
+
+查看状态
+kubectl get pv, pvc
+
+
+当PV的STATUS为Bound才说明成功。
+
+
+
+创建测试的Pod：
+
+vi  testpod3.yaml
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: testpod3
+spec:
+  containers:
+  - name: ng
+    image: nginx
+    volumeMounts:
+    - name: testpv-storage
+      mountPath: /mnt
+  volumes:
+  - name: testpv-storage
+    persistentVolumeClaim:
+      claimName: testpvc
+
+
+应用YAML
+kubectl apply -f testpod3.yaml
+
+
+
+
+进入Pod查看pv挂载情况
+kubectl get po 
+kubectl exec -it testpod3 -- sh  ##进去后可以 df 查看有无单独挂载/mnt，同时也可以在/mnt/里新建文件，然后退出后到testpv所在Node的 /tmp/testpv/目录里查看是否有新建的文件
+
+
+1.14.4  PV和PVC匹配规则
+PV创建好后，会等待PVC与其进行绑定，PVC一旦找到合适的PV就会绑定。如果有多个PV时，PVC又是如何匹配PV的呢？它有如下一些规则：
+
+
+
+访问模式和存储类匹配：Kubernetes会筛选出访问模式（accessModes）和存储类（storageClassName）与PVC相匹配的PV。如果没有匹配的PV，PVC将保持未绑定状态。
+
+
+资源大小：在满足访问模式和存储类匹配的PV中，Kubernetes会选择资源大小大于或等于PVC请求大小的PV。
+
+
+
+最佳匹配：在满足访问模式、存储类和资源大小的PV中，Kubernetes会选择资源大小最接近PVC请求大小的PV。如果有多个PV具有相同的资源大小，Kubernetes会选择其中一个进行绑定。
+
+
+
+避免重复绑定：一个PV在任何时候只能被一个PVC绑定。一旦PV被绑定到一个PVC，它将不再可用于其他PVC。

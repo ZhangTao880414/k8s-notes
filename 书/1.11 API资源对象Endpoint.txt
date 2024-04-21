@@ -1,0 +1,52 @@
+1.11.1 什么是Endpoint
+Endpoint（简称ep）资源是和Service一一对应的，也就是说每一个Service都会对应一个Endpoint。
+
+
+我们可以同时查看ep和svc：
+
+kubectl get ep
+kubectl  get svc
+
+
+可以看到，它们是一一对应的，Endpoint可以理解成Service后端对应的资源。
+
+
+
+有时候K8s里的Pod需要访问外部资源，比如访问外部的MySQL服务，就可以定义一个对外资源的Ednpoint，然后再定义一个Service，就可以让K8s里面的其它Pod访问了。
+1.11.2 Endpoint YAML示例
+假设YAML文件名为testep.yaml
+vi  testep.yaml  
+
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: external-mysql
+subsets: ## 这里定义外部资源的IP和port
+  - addresses:  
+    - ip: 192.168.222.128
+    ports:
+      - port: 3306
+---
+apiVersion: v1
+kind: Service  ##注意，该service里并不需要定义selector，只要Service name和Endpoint name保持一致即可
+metadata:
+  name: external-mysql
+spec:
+  ports:
+    - port: 3306
+
+
+说明： 定义完Endpoint同时也要定义一个对应的Service才能使用此Endpoint。此时k8s里的内部Pod只要访问external-mysql这个svc即可访问到192.168.222.128:3306。
+
+
+1.11.3 Endpoint创建和删除
+
+
+创建Endpoint
+kubectl apply -f testep.yaml
+
+查看Endpoint
+kubectl get  ep,svc
+
+删除ep
+kubectl delete -f testep.yaml

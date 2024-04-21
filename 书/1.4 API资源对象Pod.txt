@@ -1,0 +1,162 @@
+1.4.1 k8s里的资源对象
+
+在K8s里，YAML用来声明API对象的，那么API对象都有哪些？可以这样查看资源对象：
+
+kubectl api-resources
+
+接下来的章节，我们会介绍一些常见的资源对象。
+
+1.4.2 Pod
+Pod为K8s里最小、最简单的资源对象。它跟Docker容器还是有一定区别的，它比容器的单元更大一些，也就是说在Pod里会包含容器，一个Pod里可以有多个容器。
+
+1）运行一个pod
+我们可以使用kubectl命令快速启动一个Pod，命令如下：
+
+kubectl run pod-demo --image=busybox
+说明： Pod名字为pod-demo，镜像为busybox
+
+然后，从已知Pod导出YAML文件：
+kubectl get pod pod-demo -o yaml  > pod-demo.yaml
+
+
+
+2）Pod的YAML文件
+Pod YAML示例：
+四个核心部分：apiVersion、Kind、metadata、spec
+
+
+以下为一个Pod的YAML文件示例内容：
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ngx-pod
+  namespace: aming
+  labels:  ## labels字段非常关键，它可以添加任意数量的Key-Value，目的是为了让pod的信息更加详细
+    env: dev
+spec:  ##用来定义该pod更多的资源信息，比如containers, volume, storage
+  containers:  ##定义容器属性
+  - image: nginx:1.23.2
+    imagePullPolicy: IfNotPresent  ##镜像拉取策略，三种：Always/Never/IfNotPresent，一般默认是IfNotPresent，也就是说只有本地不存在才会远程拉取镜像，可以减少网络消耗。
+    name: ngx
+    env:  ##定义变量，类似于Dockerfile里面的ENV指令
+      - name: os
+        value: "Rocky Linux"
+    ports:
+    - containerPort: 80
+关于这个YAML文件内容，大家不用死记硬背，后续工作中如果遇到，可以直接通过一个临时Pod导出一个模版YAML，然后基于模版YAML去修改即可。
+
+
+
+3）基于YAML创建和删除Pod
+工作中，我们创建Pod，更多地是基于YAML来创建，而非使用kubectl命令
+
+kubectl apply -f ngx-pod.yaml
+
+
+
+而删除Pod的话，也可以基于YAML文件来实现：
+
+kubectl delete -f ngx-pod.yaml
+
+4）查看Pod信息
+工作中，我们大部分时间并非创建Pod，而是要观察和管理Pod，那如何查看Pod的状态，我们必须要掌握。
+
+
+
+列出Pod：
+
+kubectl get pod  ## 列出默认命名空间的pod
+
+kubect get pod  -n kube-system  ##列出kube-system命名空间的pod
+
+
+
+查看Pod的详细信息：
+
+kubectl  describe pod  ngx-pod
+
+可以看到Pod相关的信息，比如镜像是什么、IP是什么、Pod的创建日志等
+
+
+
+查看Pod日志：
+
+kubectl logs ngx-pod
+
+kubectl  logs -f ngx-pod  ## 动态查看日志，类似于tail -f
+
+kubectl  logs --tail=100 ngx-pod  ## 查看最后100行日志
+
+
+
+1.4.3 Pod资源限制
+1）Resource Quota
+资源配额Resource Quotas（简称quota）是对namespace进行资源配额，限制资源使用的一种策略。 
+
+
+
+K8s是一个多用户架构，当多用户或者团队共享一个K8s系统时，SA使用quota防止用户（基于namespace的）的资源抢占，定义好资源分配策略。
+
+
+
+Quota应用在Namespace上，默认情况下，没有Resource Quota的，需要另外创建Quota，并且每个Namespace最多只能有一个Quota对象。
+
+Resource Quota可限定资源类型，主要有三大类：计算资源、存储资源以及资源个数。
+
+
+
+计算资源：
+
+主要是针对CPU和内存的限制
+
+limits.cpu、requests.cpu、limits.memory、requests.memory
+
+
+
+存储资源：
+
+包括存储资源的总量以及指定storage class的总量
+
+requests.storage：存储资源总量，如500Gi
+persistentvolumeclaims：pvc的个数
+
+对象数：
+
+即可创建的对象的个数
+
+pods, replicationcontrollers, configmaps, secrets，persistentvolumeclaims，services, services.loadbalancers,services.nodeports
+
+Resource Quota依赖于资源管理器，可以使用资源对象limits或者在创建资源对象时为pod设置资源限制（resources），如果不设置，资源对象无法创建。
+
+2）Pod的limits和requests
+Resource Quota是针对namespace下面所有的Pod的限制，而Pod自身也有限制。
+
+
+
+示例如下：
+cat > quota-pod.yaml <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: quota-pod
+  namespace: aming
+
+spec:
+  containers:
+  - image: nginx:1.23.2
+    name: ngx
+    imagePullPolicy: IfNotPresent
+    ports:
+    - containerPort: 80
+    resources:
+      limits:
+        cpu: 0.5  ##限制Pod CPU资源最多使用500m，这里的0.5=500m，1=1000m
+        memory: 2Gi ##限制内存资源最多使用2G
+      requests:
+        cpu: 200m  ##K8s要保证Pod使用的最小cpu资源为200m，如果node上资源满足不了，则不会调度到该node上
+        memory: 512Mi ##K8s要保证Pod使用最小内存为512M，如果node上资源满足不了，则不会调度到该node上
+EOF
+
+
+关于limits和requests的简单区分：limits重在限制，意思是不允许超过这么多；而requests重在保障，意思是至少要给到这么多。

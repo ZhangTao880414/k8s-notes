@@ -1,0 +1,91 @@
+Ingress Nginx 控制器作为一种流行且强大的入口网关解决方案，不仅提供了负载均衡、路由转发等功能，还内置了多种安全措施，其中之一便是基本认证（Basic Authentication）。
+
+
+基本认证通过用户名和密码对请求进行验证，确保只有经过授权的用户才能访问指定的服务。
+
+4.2.1 创建用户名密码文件
+我们需要使用 htpasswd 工具（通常来自 Apache 软件包 yum -y install httpd ）生成一个包含用户名和哈希密码的文件。此文件将存储在 Kubernetes Secret 中。
+
+# 创建一个用户名为user的密码
+htpasswd -c auth zhdya
+4.2.2 创建Secret资源
+
+将密码文件的内容转换为 Kubernetes Secret 对象
+kubectl create secret generic basic-auth --from-file=auth
+4.2.3 配置验证示例
+以下是Nginx的deployment以及service对应的yaml文件：
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+ name: svc-demo
+spec:
+ replicas: 2
+ selector:
+   matchLabels:
+     app: myapp
+ template:
+   metadata:
+     labels:
+       app: myapp
+   spec:
+     containers:
+     - image: nginx:1.18.0
+       name: svc-demo
+       ports:
+       - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+ name: svc-demo
+spec:
+ selector:  
+   app: myapp
+ ports:
+ - targetPort: 80  # 后端Pod的端口
+   port: 80 # 服务要暴露的端口
+4.2.4 配置Ingress资源
+在 Ingress 规则中引用创建好的 Secret，并开启基本认证。
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+ name: nginx-ing
+ annotations:
+   nginx.ingress.kubernetes.io/auth-type: basic
+   nginx.ingress.kubernetes.io/auth-secret: basic-auth
+   nginx.ingress.kubernetes.io/auth-realm: 'Authentication Required - admin'
+spec:
+ ingressClassName: nginx
+ rules:
+   - host: nginx.kubernets.cn
+     http:
+       paths:
+         - pathType: Prefix
+           backend:
+             service:
+               name: svc-demo
+               port:
+                 number: 80
+           path: /
+测试验证：
+# curl nginx.kubernets.cn:30318
+<html>
+<head><title>401 Authorization Required</title></head>
+<body>
+<center><h1>401 Authorization Required</h1></center>
+<hr><center>nginx</center>
+</body>
+</html>
+
+# curl http://nginx.kubernets.cn:30318 -u 'zhdya:password' -I
+HTTP/1.1 200 OK
+Date: Wed, 13 Mar 2024 11:12:31 GMT
+Content-Type: text/html
+Content-Length: 612
+Connection: keep-alive
+Last-Modified: Tue, 21 Apr 2020 14:09:01 GMT
+ETag: "5e9efe7d-264"
+Accept-Ranges: bytes
+在部署完带有基本认证的Ingress资源后，尝试访问目标服务时，浏览器会提示输入用户名和密码。只有当输入正确的凭证时，用户才能访问到服务内容。

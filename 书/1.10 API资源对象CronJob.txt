@@ -1,0 +1,75 @@
+1.10.1 CronJob概述
+CronJob（简称cj）是一种周期运行的Pod，比如有些任务需要每天执行一次，就可以使用CronJob。
+
+
+
+CronJob 提供了一种简单而强大的机制来管理定时任务，能够满足各种场景下的自动化任务调度需求。无论是周期性的数据备份、定时清理、报表生成还是其他类型的定时任务，CronJob 都是 Kubernetes 集群中处理定时任务的理想选择。
+
+1.10.2 CronJob YAML示例
+先来生成一个YAML文件：
+kubectl create cj cj-demo --image=busybox --schedule="" --dry-run=client  -o yaml > cj-demo.yaml
+
+
+编辑此配置
+
+vi job-demo.yaml  
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cj-demo
+spec:
+  schedule: '*/1 * * * *'
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - image: busybox
+            name: cj-demo
+            imagePullPolicy: IfNotPresent
+            command: ["/bin/echo"]
+            args: ["hello", "world"]
+
+YAML参数主要说明：
+
+spec：定义了 CronJob 对象的规格，包括了调度时间和任务模板
+
+schedule: '*/1 * * * *'：定义了 CronJob 的调度时间表达式，这里使用的是 Cron 表达式 '*/1 * * * *'，表示每隔 1 分钟执行一次任务。
+
+jobTemplate：定义了任务模板，即定时执行的具体任务。
+
+spec：定义了任务模板的规格，包括了 Pod 模板和任务执行策略等。
+
+template：定义了要创建的 Pod 的模板。
+
+spec：定义了 Pod 的规格，包括了容器的配置、重启策略等。
+
+restartPolicy: OnFailure：定义了 Pod 的重启策略为 OnFailure，表示如果 Pod 失败（即退出代码非 0），则重新启动 Pod。其他可选值还包括 Never，表示永远不会重启 Pod。
+
+containers：定义了要在 Pod 中运行的容器列表。
+
+- image: busybox：定义了容器所使用的镜像为 busybox，这是一个轻量级的 Linux 发行版，常用于测试和调试。
+
+name: cj-demo：定义了容器的名称为 cj-demo。
+
+imagePullPolicy: IfNotPresent：定义了容器的镜像拉取策略为 IfNotPresent，表示如果本地已经存在镜像，则不再拉取新的镜像。
+
+command: ["/bin/echo"]：定义了容器执行的命令为 /bin/echo，表示执行 echo 命令。
+
+args: ["hello", "world"]：定义了传递给命令的参数，这里是两个参数 "hello" 和 "world"。因此，该容器将执行的命令为 /bin/echo hello world，输出 "hello world"。
+
+
+
+
+1.10.3 CronJob创建和删除
+
+
+创建CronJob
+kubectl apply -f cj-demo.yaml
+
+查看CronJob
+kubectl get cj,pod
+
+删除CronJob
+kubectl delete -f cj-demo.yaml

@@ -1,0 +1,136 @@
+在大规模的 Kubernetes 集群环境中，安全高效的运维离不开细粒度的权限管理。为此，Kubernetes引入了 Role-Based Access Control（RBAC）机制，通过对用户、组和资源的权限划分，实现精细的访问控制，进而保障系统的安全性与稳定性，助力实现零宕机运维目标。
+3.6.1 RBAC基本概念
+RBAC的核心思想是基于角色的权限分配。主要包括以下五个关键概念：
+
+ServiceAccount：是一种用于身份验证和授权的对象，可以被绑定到角色或集群角色上，从而授予Pod或其他资源相应的权限。
+
+Role（角色）：定义了一组针对 Kubernetes 资源的操作集合，如读取、创建、更新或删除Pod等。
+
+ClusterRole：与 Role 相似，但其作用范围是整个集群，不受命名空间限制。
+
+RoleBinding：将 Role 关联到具体的用户或用户组，赋予他们在特定命名空间内的操作权限。
+ClusterRoleBinding：类似于 RoleBinding，但用于将 ClusterRole 关联到用户或用户组，赋予他们在整个集群范围内的操作权限。
+3.6.2 绑定关系
+Role 和 RoleBinding：用于在特定命名空间内实现细粒度的授权和访问控制。通过创建自定义的 Role，可以指定特定用户或用户组对命名空间内的资源进行访问、创建、更新和删除等操作。RoleBinding 则将用户或用户组与特定的 Role 关联起来。
+ClusterRole 和 ClusterRoleBinding：用于在集群级别实现更宽泛的授权和访问控制。通过创建自定义的 ClusterRole，可以授予用户或用户组对整个集群范围内的资源进行操作的权限。ClusterRoleBinding 将用户或用户组与特定的 ClusterRole 关联起来。
+ClusterRole 和 RoleBinding：将集群级别的权限授予特定命名空间内的用户或用户组。通过在 RoleBinding 中指定 ClusterRole，并将其与命名空间内的用户或用户组进行关联，这些用户或用户组将同时具备命名空间内资源的访问权限和集群范围的权限。
+
+
+
+3.6.3 RBAC 资源控制
+1）资源类型（Resources）：Kubernetes中的资源类型涵盖了Pods、Services、ConfigMaps、Secrets、Namespaces等各种API对象，每一类资源都有相应的CRUD（Create, Read, Update, Delete）操作权限。
+2）API组和版本（API Groups and Versions）：资源还可以根据API组和版本进行分类，例如“core”API组（""，空字符串表示核心API组）中的Pods资源，或“apps/v1”API组中的Deployments资源。
+3）操作（Verbs）：权限的具体表现形式是一系列操作，常见的操作包括get（获取）、list（列举）、create（创建）、update（更新）、patch（局部更新）、delete（删除）以及watch（实时监听变更）等。
+4）命名空间（Namespaces）：在Kubernetes中，权限还可以根据命名空间进行限制。Role通常会限制在某个特定的命名空间内生效，而ClusterRole则在全集群范围内生效。
+5）角色（Roles/ClusterRoles）：角色是对一组权限的抽象封装，它定义了针对特定资源类型的操作集合。例如，可以创建一个Role，允许用户在某一命名空间内创建和查看Pod。
+6）绑定（RoleBindings/ClusterRoleBindings）：通过绑定（RoleBinding或ClusterRoleBinding），可以将角色与用户、用户组或ServiceAccount关联起来，赋予它们相应的权限。
+3.6.4 实战案例
+案例：为指定用户授权访问不同命名空间权限。
+
+例如，新入职一个运维小弟，希望让他先熟悉K8S集群，为了安全性，先不能给他太大权限，因此先给他授权访问 default 命名空间 Pod 读取权限。
+主要步骤：
+用K8S CA签发客户端证书
+生成kubeconfig授权文件
+创建RBAC权限策略
+指定kubeconfig文件测试权限
+3.6.4.1 签发客户端证书
+cat > ca-config.json <<EOF
+{
+ "signing": {
+   "default": {
+     "expiry": "87600h"
+   },
+   "profiles": {
+     "kubernetes": {
+       "usages": [
+           "signing",
+           "key encipherment",
+           "server auth",
+           "client auth"
+       ],
+       "expiry": "87600h"
+     }
+   }
+ }
+}
+EOF
+
+cat > zhdya-csr.json <<EOF
+{
+ "CN": "zhdya",
+ "hosts": [],
+ "key": {
+   "algo": "rsa",
+   "size": 2048
+ },
+ "names": [
+   {
+     "C": "CN",
+     "ST": "BeiJing",
+     "L": "BeiJing",
+     "O": "k8s",
+     "OU": "System"
+   }
+ ]
+}
+EOF
+执行：
+
+cfssl gencert -ca=/etc/kubernetes/pki/ca.crt -ca-key=/etc/kubernetes/pki/ca.key -config=ca-config.json -profile=kubernetes zhdya-csr.json | cfssljson -bare zhdya
+3.6.4.2 生成kubeconfig授权文件
+kubectl config set-cluster kubernetes \
+ --certificate-authority=/etc/kubernetes/pki/ca.crt \
+ --embed-certs=true \
+ --server=https://192.10.192.16:6443 \
+ --kubeconfig=zhdya.kubeconfig
+
+# 设置客户端认证
+kubectl config set-credentials zhdya \
+ --client-key=zhdya-key.pem \
+ --client-certificate=zhdya.pem \
+ --embed-certs=true \
+ --kubeconfig=zhdya.kubeconfig
+
+# 设置默认上下文
+kubectl config set-context kubernetes \
+ --cluster=kubernetes \
+ --user=zhdya \
+ --kubeconfig=zhdya.kubeconfig
+
+# 设置当前使用配置
+kubectl config use-context kubernetes --kubeconfig=zhdya.kubeconfig
+3.6.4.3 创建RBAC权限策略
+##角色权限分配：
+kind: Role
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+ namespace: default
+ name: pod-reader
+rules:
+- apiGroups: [""]  #api组，例如apps组，空值表示是核心API组，像namespace、pod、service、pv、pvc都在里面
+ resources: ["pods"]  #资源名称（复数），例如pods、deployments、services
+ verbs: ["get", "watch", "list"] #资源操作方法,例如create/delete
+
+---
+#将主体与角色绑定
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+ name: read-pods
+ namespace: default
+subjects:
+- kind: User  # 主体
+ name: zhdya # 主体名称
+ apiGroup: rbac.authorization.k8s.io
+roleRef:  # 绑定的角色
+ kind: Role
+ name: pod-reader  # 角色名称
+ apiGroup: rbac.authorization.k8s.io
+3.6.4.4 指定 kubeconfig 文件测试权限
+kubectl get pod --kubeconfig=zhdya.kubeconfig
+这样一来，被关联的 ServiceAccount 便拥有了在default 命名空间内管理 Pod 的权限。
+3.6.5 总结
+
+通过精细化的权限管理，RBAC可以防止因误操作或恶意行为导致的资源破坏或服务中断，从而间接地为实现零宕机运维创造了有利条件。
+例如，严格的权限控制可以避免未经许可的用户错误地删除生产环境中的重要组件，进而触发服务不可用事件。
+因此，完善的RBAC策略是整体运维管理体系中不可或缺的一部分，它可以增强系统的安全性，减少因人为错误带来的潜在服务中断风险。

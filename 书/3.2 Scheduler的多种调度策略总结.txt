@@ -1,0 +1,285 @@
+Kubernetes 中的 scheduler 是一个关键组件，它的主要职责是将待调度的 Pods 分配到集群中的合适 Node 上运行。调度过程旨在最大化集群资源的利用效率，同时确保服务的高可用性和满足用户定义的各种约束条件。
+3.2.1 Scheduler概述
+作用：Kubernetes Scheduler 根据一系列预定义的调度策略和算法，将用户创建或更新的 Pods 进行合理布局，使其在集群的 Node 节点上高效运行。
+设计原则：设计时充分考虑了公平性、资源利用率、服务质量（QoS）、灵活性、可扩展性和高可用性，以及避免内部负载干扰等因素。
+调度策略：内置了多种预选策略（predicates）和优选策略（priorities）。预选策略用来筛选出满足一定条件的候选节点，优选策略则对通过预选的节点进行打分，最终将 Pod 分配给得分最高的节点。
+
+3.2.2 Scheduler 调度过程
+1）监听待调度 Pods：
+
+    Scheduler 监听 Kubernetes API Server 中的事件，一旦有新的 Pod 或 Pod 更新导致其需要被调度，Scheduler 就会介入。
+
+
+2）预选阶段（Predicates）：
+
+    过滤（Filtering）：Scheduler 首先遍历所有可用的 Node，针对每个待调度的 Pod，逐个检查节点是否满足预设的预选策略，如资源充足（PodFitsResources）、端口可用（PodFitsPorts）、无磁盘冲突（NoDiskConflict）、满足节点标签选择器（MatchNodeSelector）等。
+
+
+3）优选阶段（Priorities）：
+
+    打分（Scoring）：对于通过预选策略的节点，Scheduler 会进一步根据优选策略对每个节点进行评分，这些策略可能包括节点的资源利用率、亲和性/反亲和性、区域/区域能力等。
+
+    选择最佳节点：最后，Scheduler 会选择评分最高的节点作为目标节点，将 Pod 绑定到该节点上。
+
+
+4）执行调度决策：
+
+    Scheduler 将其选择的调度决策（即将 Pod 绑定到某节点）通过 API Server 更新到集群状态中。
+
+
+5）通知 kubelet：
+
+    目标节点上的 kubelet 通过监听 API Server，获知调度决策后，开始准备执行Pod，包括下载容器镜像、创建容器等操作，最终完成Pod的启动。
+
+
+
+3.2.3 NodeSelector
+调度策略在 Kubernetes 中是指在调度 Pod 到 Node 时所采用的一系列规则和偏好，目的是为了确保 Pod 能够被合理地放置到集群内的合适节点上运行。其中一个基础且常用的调度策略是 NodeSelector。
+NodeSelector 是 Kubernetes 中一种简单但实用的调度策略，它允许用户通过 Pod 的 YAML 配置文件指定 Pod 应该运行在哪些具备特定标签（Label）的 Node上。这样可以实现 Pod 与 Node 之间的基本匹配。
+例如，假设有一个 Kubernetes 集群，其中有两类 Node，一类标记为 disktype:ssd，另一类标记为 disktype:hdd。如果我们有一个需要高性能存储的应用Pod，那么可以通过 NodeSelector 来指定该 Pod 只能运行在固态硬盘（SSD）节点
+上：
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+ name: busybox
+spec:
+ replicas: 3
+ selector:
+   matchLabels:
+     app: busybox
+ template:
+   metadata:
+     labels:
+       app: busybox
+   spec:
+     nodeSelector:
+       disktype: ssd
+     containers:
+     - name: busybox
+       image: busybox
+       imagePullPolicy: IfNotPresent
+       command:
+       - /bin/sh
+       - -c
+       - sleep 3000
+在这个例子中，Pod 的定义中包含了 nodeSelector 字段，其中指定了 disktype:ssd。这意味着当 Kubernetes 调度器尝试调度此 Pod 时，它只会考虑那些具有标签 disktype 且其值为 ssd 的 Node。这样就可以确保 Pod 运行在满足特定硬件要求（如使用SSD存储）的 Node上。
+3.2.4 Affinity and Anti-Affinity
+Affinity and Anti-Affinity（亲和性和反亲和性）是在 Kubernetes 调度策略中更高级别、更细致的匹配机制，相较于 NodeSelector 仅能基于单一标签进行简单匹配，亲和性和反亲和性提供了更为灵活和精细的调度控制手段，可以根据多个条件和不同类型的关联性来进行 Pod 的调度。
+3.2.4.1 亲和性（Affinity）
+亲和性策略允许 Pod 主动选择希望与其一起运行或邻近的其他 Pod 或 Node。它可以细分为两种类型：
+1）节点亲和性（Node Affinity）：
+硬亲和性（requiredDuringSchedulingIgnoredDuringExecution）：强制要求Pod必须调度到满足特定条件的节点上，否则Pod将无法创建。
+spec:
+ affinity:
+   nodeAffinity:
+     requiredDuringSchedulingIgnoredDuringExecution:
+       nodeSelectorTerms:
+       - matchExpressions:
+         - key: disktype
+           operator: In
+           values:
+           - ssd
+软亲和性（preferredDuringSchedulingIgnoredDuringExecution）：非强制性建议 Pod 尽可能调度到满足条件的节点，但调度器仍有可能将 Pod 调度到不完全满足条件的节点上。
+2）pod亲和性（Pod Affinity）：
+同名空间内或跨命名空间的Pod可以设置亲和性，以便在同一个或相邻的节点上运行。
+例如，Pod可以设置成倾向于与带有特定标签的 Pod 共存于同一节点（上下游交互较多）。
+
+
+3.2.4.2 反亲和性（Anti-Affinity）
+
+反亲和性与亲和性相反，它确保 Pod 不会调度到某些节点上，或者不会与具有特定属性的其他 Pod 位于同一节点上，用于分散风险或减少资源竞争。
+1）节点反亲和性（Node Anti-Affinity）：
+类似于硬亲和性，只不过效果是排除而非匹配。例如，一个 Po d可以被配置为避免与标记为 disktype:hdd 的节点调度在一起。
+2）Pod反亲和性（Pod Anti-Affinity）：
+可以设置 Pod 避免与带有特定标签的其他 Pod 在同一节点上运行，通常用于防止同类服务过度集中在一个节点上，以提高服务的可用性和负载均衡。
+例如，一个典型的应用场景是确保前端服务的 Pod 分布在不同的节点上以提高容灾能力：
+spec:
+ affinity:
+   podAntiAffinity:
+     requiredDuringSchedulingIgnoredDuringExecution:
+     - labelSelector:
+         matchExpressions:
+         - key: app
+           operator: In
+           values:
+           - frontend
+       topologyKey: "kubernetes.io/hostname"
+在这个例子中，Pod 定义了一个硬反亲和性规则，意味着 Pod 会尽量调度到没有运行同样被打上 app=frontend 标签的 Pod 的节点上，topologyKey 则指定了按主机名进行拓扑分散。
+
+3.2.5 实战验证
+NodeAffinity 示例：
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+ name: nginx-deployment-node-affinity
+spec:
+ replicas: 2
+ selector:
+   matchLabels:
+     app: nginx
+ template:
+   metadata:
+     labels:
+       app: nginx
+   spec:
+     affinity:
+       nodeAffinity:
+         requiredDuringSchedulingIgnoredDuringExecution:
+           nodeSelectorTerms:
+           # 确保Pod只调度到标记为"disktype: ssd"的节点上
+           - matchExpressions:
+             - key: disktype
+               operator: In
+               values:
+               - ssd
+     containers:
+     - name: nginx
+       image: nginx:latest
+       ports:
+       - containerPort: 80
+在这个例子中，我们定义了一个名为 nginx-deployment-node-affinity 的 Deployment，其中的 Pod 具有一个 NodeAffinity 规则，表明 Pod 必须调度到标签disktype 为 ssd 的节点上。这样可以确保我们的 Nginx 实例运行在具有固态硬盘的节点上。
+
+PodAffinity 示例：
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+ name: nginx-deployment-pod-affinity
+spec:
+ replicas: 2
+ selector:
+   matchLabels:
+     app: nginx
+     role: web-tier
+ template:
+   metadata:
+     labels:
+       app: nginx
+       role: web-tier
+   spec:
+     affinity:
+       podAffinity:
+         requiredDuringSchedulingIgnoredDuringExecution:
+         - labelSelector:
+             matchExpressions:
+             - key: app
+               operator: In
+               values:
+               - nginx
+               - backend
+           topologyKey: "kubernetes.io/hostname"
+     containers:
+     - name: nginx
+       image: nginx:latest
+       ports:
+       - containerPort: 80
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+ name: backend-service
+spec:
+ replicas: 1
+ selector:
+   matchLabels:
+     app: backend
+ template:
+   metadata:
+     labels:
+       app: backend
+   spec:
+     containers:
+     - name: backend
+       image: nginx:latest
+       ports:
+       - containerPort: 80
+在此示例中，我们有两个 Deployment，一个是名为 nginx-deployment-pod-affinity 的 Nginx 前端服务，另一个是名为 backend-service 的后端服务。Nginx Deployment 设置了 PodAffinity 规则，要求 Pod 尽量调度到已运行有标签 app 为 nginx 或 backend 的 Pod 所在的主机上（通过 topologyKey: "kubernetes.io/hostname"指定主机名作为拓扑键）。这样一来，Nginx 前端服务会倾向于与后端服务分布在相同的节点上，从而降低网络延迟，提高整体服务性能。
+
+
+3.2.6 污点（taints）与容忍（tolerations）
+污点（Taints）与容忍（Tolerations）是Kubernetes中另一种高级调度策略，主要用于控制Pod能否被调度到特定的节点上，或者是否允许节点上的 Pod 被驱逐。
+3.2.6.1、污点（Taints）
+污点是一种由集群管理员施加在节点上的标记，表示节点具有某种特殊属性或限制，只有能够容忍这种污点的 Pod 才能被调度到该节点上。
+污点由三部分组成：键(key)、值(value) 和效应 (effect)。效应 (effect)可以是以下三种之一：
+NoSchedule：不允许不能容忍该污点的Pod被调度到该节点上。
+PreferNoSchedule：尽量不要将不能容忍该污点的Pod调度到该节点，但在资源极度紧张时仍然可能调度。
+NoExecute：不仅阻止新的不能容忍污点的 Pod 调度到节点，而且已经在节点上运行且不能容忍污点的 Pod 也将被驱逐。
+要通过 kubectl 命令给节点添加污点（Taint），可以使用 kubectl taint 命令。以下是一个命令示例：
+kubectl taint nodes <节点名> key=value:effect
+这里的 <节点名> 应替换为实际的节点名称，key=value 是你要设置的污点键值对，effect 是污点的效果，可以是 NoSchedule、PreferNoSchedule 或 NoExecute。
+例如，如果你有一个名为 node3 的节点，并希望将其设置为带有污点 dedicated=gpu:NoSchedule，表示专用 GPU 节点并且不允许不能容忍此污点的 Pod 被调度到此节点，可以执行以下命令：
+kubectl taint nodes node3 dedicated=gpu:NoSchedule
+这条命令会立刻在 node3 节点上添加一个污点，使得只有声明了能容忍 dedicated=gpu 污点的 Pod 才能被调度到该节点上。
+要移除节点上的污点，可以使用 kubectl taint 命令结合 --remove 参数：
+kubectl taint nodes node3 dedicated=gpu:NoSchedule-
+这将从 node3 节点上移除对应的污点设置。
+3.2.6.2 容忍（Tolerations）
+容忍则是 Pod 的一种属性，它定义了 Pod 可以接受什么样的污点。如果一个 Pod 在其 spec 中声明了对某个污点的容忍，那么这个 Pod 就能被调度到带有对应污点的节点上。
+
+例如，在 Pod 的定义中添加容忍：
+
+apiVersion: v1
+kind: Pod
+metadata:
+ name: gpu-pod
+spec:
+ tolerations:
+ - key: "dedicated"
+   operator: "Equal"
+   value: "gpu"
+   effect: "NoSchedule"
+ containers:
+ - name: my-gpu-container
+   image: nvidia/cuda-sample:latest
+在这个例子中，gpu-pod声明了它能够容忍 key=dedicated 和 value=gpu 的污点，并且能接受 NoSchedule 效应，因此它可以被调度到上面设置了相应污点的special-node 节点上运行。
+通过污点与容忍的配合，Kubernetes 集群管理员可以精确控制Pod的分布和资源使用，比如将特定类型的工作负载限制在具有特定硬件资源的节点上，或者在节点维护时将某些 Pod 临时迁移到其他节点。
+3.2.6.3 实战验证
+要验证污点（Taints）与容忍（Tolerations）的功能，我们可以创建一个带有污点的节点，再创建一个具有相应容忍的 Nginx Deployment。
+
+下面是一个详细的步骤：
+
+首先，我们需要给某个节点添加一个污点（这里假设我们有一个名为 special-node 的节点）：
+kubectl taint nodes special-node dedicated=gpu:NoSchedule
+接下来，创建一个 Nginx Deployment，该 Deployment 的 Pod 具有容忍该污点的配置：
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+ name: nginx-toleration-deployment
+spec:
+ replicas: 3
+ selector:
+   matchLabels:
+     app: nginx
+ template:
+   metadata:
+     labels:
+       app: nginx
+   spec:
+     tolerations:
+     - key: "dedicated"
+       operator: "Equal"
+       value: "gpu"
+       effect: "NoSchedule"
+     containers:
+     - name: nginx
+       image: nginx:latest
+       ports:
+       - containerPort: 80
+保存上述内容到一个文件，比如 nginx-toleration-deployment.yaml，然后应用配置：
+kubectl apply -f nginx-toleration-deployment.yaml
+现在，因为 Nginx Deployment 的 Pod 模板中包含了对 dedicated=gpu 污点的容忍，所以尽管 special-node 上有 NoSchedule 效果的污点，Pod 依然会被调度到该节点上。
+你可以通过 kubectl describe node special-node 查看节点的污点信息，以及 kubectl get pods -o wide 来查看 Pod 是否成功调度到了该节点上。
+如果一切正常，你应该能看到 Nginx Deployment 的 Pod 被调度到了带有污点的 special-node 节点上运行。
+3.2.7 总结
+在Kubernetes中，NodeSelector、Affinity、Anti-Affinity、Taints 和 Tolerations 构成了丰富的调度策略体系，它们共同决定了 Pod 与 Node 间的匹配和调度规则。
+
+
+
+NodeSelector 基于 Node 标签进行基本筛选，Affinity 和 Anti-Affinity 实现更为复杂精细的亲和或反亲和调度策略，如基于 Node 或 Pod 标签进行硬性或软性约束。
+
+
+
+Taints 是 Node 上的排斥标签，用于限制 Pod 的调度，而 Tolerations 则是 Pod 用来接纳和兼容Node上特定Taint的属性。这些策略相结合，确保了 Pod 在集群中依据各种条件得到最优、最灵活且符合业务需求的调度。
+

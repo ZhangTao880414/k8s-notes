@@ -1,0 +1,114 @@
+1.7.1 DaemonSet概述
+DaemonSet 在 Kubernetes 中的作用类似于守护进程，确保每个节点都运行着某个特定的 Pod 实例，从而实现集群中各个节点的统一管理和运行一致性。
+
+也就是说，有几个Node，就会起几个Pod副本。它适用于基础设施或者后台服务，比如监控代理、日志收集、存储代理等。
+
+当节点动态地加入或离开集群时，DaemonSet 会自动地在新节点上启动或停止 Pod 实例，以确保在整个集群中的每个节点都有相应的 Pod 在运行。
+
+1.7.2 Daemonset YAML示例
+Daemonset不支持使用kubectl create获取YAML模板，所以只能照葫芦画瓢了，参考Deployment的YAML编写，其实Daemonset和Deployment的差异很小，除了Kind不一样，还需要去掉replica配置。
+
+
+这里假设文件名为ds-demo.yaml
+
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  labels:
+    app: ds-demo
+  name: ds-demo
+spec:
+  selector:
+    matchLabels:
+      app: ds-demo
+  template:
+    metadata:
+      labels:
+        app: ds-demo
+    spec:
+      containers:
+        - name: ds-demo
+          image: nginx:1.23.2
+          ports:
+          - name: mysql-port
+            containerPort: 80
+
+
+主要参数说明：
+
+apiVersion: v1 表示这是 Kubernetes API 的第一版，这个版本包含了 Service 资源类型。    
+kind: DaemonSet 指定了这个 YAML 文件是用来定义一个 Daemonset 资源。
+metadata：包含关于 DaemonSet 对象元数据的信息，比如标签和名称等。
+labels： 用于给 DaemonSet 添加标签，这里定义了一个标签 app: ds-demo。
+name: ds-demo 定义了 DaemonSet 对象的名称为 ds-demo。
+spec：定义了 DaemonSet 对象的规格，包括了如何选择节点和如何创建 Pod。
+selector：指定了哪些节点上会运行该 DaemonSet 所定义的 Pod。
+matchLabels：指定了匹配节点的标签，这里要求节点的标签中必须含有 app: ds-demo。
+template: 定义了要创建的 Pod 的模板。
+metadata: 包含了 Pod 模板的元数据信息。
+labels：用于给 Pod 添加标签，这里定义了一个标签 app: ds-demo。
+spec：定义了 Pod 的规格，包括了容器的镜像、端口等信息。
+containers：定义了要在 Pod 中运行的容器列表。
+- name: ds-demo：定义了容器的名称为 ds-demo。
+image: nginx:1.23.2：指定了容器所使用的镜像，这里使用了名为 nginx，版本为 1.23.2 的镜像。
+ports：定义了容器暴露的端口列表。
+- name: mysql-port：定义了端口的名称为 mysql-port。
+containerPort: 80：定义了容器监听的端口号为 80，这意味着该容器会监听来自外部的 80 端口的请求。注意这里端口名为 mysql-port，但实际使用的端口号是 80。
+
+
+1.7.3 DaemonSet的创建和删除
+
+
+使用YAML创建DaemonSet（简称ds）：
+kubectl apply -f ds-demo.yaml
+
+查看：
+kubectl get ds
+kubectl get po
+
+
+但只在两个node节点上启动了pod，没有在master上启动，这是因为默认master有限制。
+kubectl describe node k8s01 |grep -i 'taint'
+Taints:             node-role.kubernetes.io/control-plane:NoSchedule
+
+
+说明：Taint叫做污点，如果某一个节点上有污点，则不会被调度运行pod。
+但是这个还得取决于Pod自己的一个属性：toleration（容忍），即这个Pod是否能够容忍目标节点是否有污点。
+为了解决此问题，我们可以在Pod上增加toleration属性（标红部分）。下面改一下YAML配置：
+
+
+vi  ds-demo.yaml
+
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  labels:
+    app: ds-demo
+  name: ds-demo
+spec:
+  selector:
+    matchLabels:
+      app: ds-demo
+  template:
+    metadata:
+      labels:
+        app: ds-demo
+    spec:
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          effect: NoSchedule
+      containers:
+        - name: ds-demo
+          image: nginx:1.23.2
+          ports:
+          - name: mysql-port
+            containerPort: 80
+
+再次应用此YAML
+
+kubectl apply -f ds-demo.yaml
+
+
+
+使用YAML删除ds：
+kubectl delete -f ds-demo.yaml

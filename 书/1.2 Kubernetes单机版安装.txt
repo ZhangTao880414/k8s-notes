@@ -1,0 +1,149 @@
+说明：以下操作以Rocky8系统做为示例
+
+测试环境最低硬件要求：
+1）CPU：2c
+2）内存：4G
+3）硬盘：50G
+
+1.2.1 准备工作
+1）关闭Selinux 和 firewalld
+临时关闭Selinux： 
+setenforce 0 
+
+永久关闭Selinux： 
+sed -i 's/SELINUX=enforcing/SELINUX=disabled/' /etc/selinux/config
+
+关闭firewalld： 
+systemctl disable firewalld;  systemctl stop firewalld
+
+2）设置主机名
+hostnamectl  set-hostname  k8s01
+
+这里假设我的主机IP为： 192.168.100.122
+echo "192.168.100.122  k8s01" >> /etc/hosts
+
+3）关闭swap
+临时关闭： 
+swapoff -a 
+
+永久关闭： 
+vi  /etc/fstab  #注释掉swap那行
+
+4）将桥接的ipv4流量传递到iptables链
+生成bridge相关内核参数
+modprobe br_netfilter  
+
+将内核参数写入配置文件
+cat > /etc/sysctl.d/k8s.conf << EOF
+net.bridge.bridge-nf-call-ip6tables = 1
+net.bridge.bridge-nf-call-iptables = 1
+net.ipv4.ip_forward = 1
+EOF
+
+使内核参数生效
+sysctl --system 
+
+5）设置时间同步
+yum install -y chrony
+systemctl start chronyd
+systemctl enable chronyd
+
+1.2.2 安装containerd
+1）配置yum 仓库
+安装yum-utils工具
+yum install -y yum-utils  
+
+配置Docker官方的yum仓库
+yum-config-manager \
+    --add-repo \
+    https://download.docker.com/linux/centos/docker-ce.repo
+
+2）yum安装containerd
+yum install containerd.io -y
+
+3）启动containerd服务
+systemctl enable containerd
+systemctl start containerd
+
+4）修改sandbox镜像地址
+先生成默认配置文件
+containerd  config default > /etc/containerd/config.toml
+
+修改配置文件
+vi  /etc/containerd/config.toml
+sandbox_image = "registry.cn-hangzhou.aliyuncs.com/google_containers/pause:3.9"   # 修改为阿里云镜像地址
+SystemdCgroup = true   #这里改为true
+
+重启containerd服务
+systemctl restart containerd
+
+1.2.3 安装kubeadm和kubelet
+1）配置kubernetes仓库
+cat <<EOF > /etc/yum.repos.d/kubernetes.repo
+[kubernetes]
+name=Kubernetes
+baseurl=https://mirrors.aliyun.com/kubernetes/yum/repos/kubernetes-el7-x86_64/
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=https://mirrors.aliyun.com/kubernetes/yum/doc/yum-key.gpg https://mirrors.aliyun.com/kubernetes/yum/doc/rpm-package-key.gpg
+EOF
+
+说明：kubernetes用的是RHEL7的源，和8是通用的
+
+2）安装kubeadm和kubelet
+yum install -y kubelet-1.27.4  kubeadm-1.27.4  kubectl-1.27.4
+
+3）启动kubelet服务
+systemctl start kubelet.service
+systemctl enable kubelet.service
+
+4）设置crictl连接 containerd
+crictl config --set runtime-endpoint=unix:///run/containerd/containerd.sock
+
+1.2.4 初始化
+1）使用kubeadm初始化k8s
+其要做的事情是将k8s核心的各个组件用容器的形式运行起来，包括aip-server、controller-manager等
+kubeadm init --image-repository=registry.cn-hangzhou.aliyuncs.com/google_containers --apiserver-advertise-address=192.168.100.122 --kubernetes-version=v1.27.4  --service-cidr=10.15.0.0/16  --pod-network-cidr=10.18.0.0/16
+
+其中有一段输出是这样的：
+kubeadm join 192.168.100.122:6443 --token u529o4.invnj3s6anxekg79 \
+        --discovery-token-ca-cert-hash sha256:27b967c444cf3f4a45fedae24ed886663a1dc2cd6ceae03930fcbda491ec5ece
+
+说明： 上面这条命令就是如果需要将node节点加入到集群需要执行的命令，单机版的不需要执行，这个token有效期为24小时，如果过期，可以使用下面命令获取
+kubeadm token create --print-join-command
+
+2）创建配置文件
+这个配置文件指的是，k8s管理员用户的相关配置，如果没有这个配置，我们是无法使用命令行工具去访问k8s里的资源对象的（如，pod、deployment、service等）
+mkdir -p $HOME/.kube
+cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+chown $(id -u):$(id -g) $HOME/.kube/config
+
+此时就可以执行如下命令来获取节点、pod信息了：
+kubectl get node   ##获取节点信息
+kubectl get pod --all-namespaces ##获取所有pod信息
+
+1.2.5 安装网络插件
+此时k8s还不能正常工作，因为它的网络插件还未安装，各组件之间还不能正常通信，下面我们来安装calico网络插件
+
+1）下载部署calico的yaml文件
+curl https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/calico.yaml -O
+
+2）修改yaml文件
+修改该yaml文件中，定义网段的配置
+vim calico.yaml  ##找到如下内容
+# - name: CALICO_IPV4POOL_CIDR
+# value: "192.168.0.0/16"
+# 修改为：
+- name: CALICO_IPV4POOL_CIDR
+  value: "10.18.0.0/16"
+注意缩进，很多同学在这里因为缩进的问题导致出错。
+
+3）部署caclico
+kubectl apply -f calico.yaml
+
+查看pod
+kubectl get pods -n kube-system
+等所有pod都是running状态才算正常
+
+到此，安装结束。 如果你想在浏览器里访问和管理k8s，还可以安装一个Dashboard组件，这个大家自行搜一下安装方法吧，非常简单。其实在我看来，没多大用。

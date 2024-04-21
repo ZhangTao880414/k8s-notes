@@ -1,0 +1,95 @@
+Ingress-nginx 提供了对 HTTP 请求速率的限制功能，这在防止服务被恶意攻击、控制客户端带宽使用或保证服务质量等方面非常有用。
+
+通过配置可以实现对来自特定IP地址或用户组的请求速率进行控制。
+
+4.6.1 实现速率限制的配置方式
+以下是如何在 Ingress-nginx 中实现速率限制的一些关键点：
+
+Nginx内置模块：
+
+Nginx 本身提供了 limit_req 模块来实现基于固定窗口算法或漏桶算法的速率限制。
+可以通过定义 limit_req_zone 来创建一个存储区域，并设置每个键（如 $binary_remote_addr 表示客户端IP）的最大请求速率。
+Ingress资源注解：
+
+nginx.ingress.kubernetes.io/limit-rps: 设置每秒接收请求数量的限制。
+
+nginx.ingress.kubernetes.io/limit-rate: 对客户端响应传输速率的限制，单位是每秒字节数。
+
+nginx.ingress.kubernetes.io/limit-rate-after: 设置初始数量，在此之后开始限速。
+
+nginx.ingress.kubernetes.io/whitelist-source-range 和黑名单类似的功能配合使用，可以针对特定IP范围设置不同的限速规则。
+
+在 Kubernetes 环境中，可以通过为 Ingress 资源添加特定的注解来应用速率限制策略。
+
+4.6.2 单个 Ingress 规则中直接配置速率限制注解
+优势：为不同的服务路径或服务提供个性化的速率限制策略。
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+ annotations:
+   nginx.ingress.kubernetes.io/limit-rate: "10K"
+   nginx.ingress.kubernetes.io/limit-whitelist: "192.10.192.16"
+   nginx.ingress.kubernetes.io/limit-rps: "1"
+   nginx.ingress.kubernetes.io/limit-rpm: "30"
+ name: nginx-ing
+spec:
+ ingressClassName: nginx
+ rules:
+   - host: nginx.kubernets.cn
+     http:
+       paths:
+         - pathType: Prefix
+           backend:
+             service:
+               name: svc-demo
+               port:
+                 number: 80
+           path: /
+字段解释：
+
+nginx.ingress.kubernetes.io/limit-rate：限制客户端每秒传输的字节数
+nginx.ingress.kubernetes.io/limit-whitelist：白名单中的IP不限速
+nginx.ingress.kubernetes.io/limit-rps：单个IP每秒的连接数
+nginx.ingress.kubernetes.io/limit-rpm：单个IP每分钟的连接数
+4.6.3 测试验证
+分别在白名单内的主机及非白名单主机，运行：
+
+for i in `seq 1 5000`; do curl nginx.kubernets.cn -I ; done
+白名单主机：
+
+HTTP/1.1 200 OK
+Date: Thu, 14 Mar 2024 03:36:41 GMT
+Content-Type: text/html
+Content-Length: 612
+Connection: keep-alive
+Last-Modified: Tue, 21 Apr 2020 14:09:01 GMT
+ETag: "5e9efe7d-264"
+Accept-Ranges: bytes
+
+^C
+[root@master1 /tmp]# ip a |grep ens192 -A1
+2: ens192: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state UP group default qlen 1000
+   link/ether 00:0c:29:a8:03:b5 brd ff:ff:ff:ff:ff:ff
+   inet 192.10.192.16/24 brd 192.10.192.255 scope global noprefixroute ens192
+非白名单主机：
+
+HTTP/1.1 503 Service Temporarily Unavailable
+Date: Thu, 14 Mar 2024 03:36:54 GMT
+Content-Type: text/html
+Content-Length: 190
+Connection: keep-alive
+
+HTTP/1.1 503 Service Temporarily Unavailable
+Date: Thu, 14 Mar 2024 03:36:53 GMT
+Content-Type: text/html
+Content-Length: 190
+Connection: keep-alive
+
+^C
+# ip a |grep ens192 -A1
+2: ens192: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state UP group default qlen 1000
+   link/ether 00:0c:29:22:23:7d brd ff:ff:ff:ff:ff:ff
+   inet 192.10.192.31/24 brd 192.10.192.255 scope global noprefixroute ens192
+发现黑名单主机访问出现了503状态码，这说明被限速了。
+

@@ -1,0 +1,89 @@
+1.6.1 Service概述
+Service 是一个抽象层，它定义了一种访问和暴露一个或多个 Pod 的方法。
+
+Service 使得外部访问容器化应用成为可能，同时提供负载均衡和服务发现的功能。
+
+Service 通过选择器来选择一组 Pod，并对外提供一个统一的访问接口，无论后端 Pod 如何变化，Service 保证访问的稳定性和连续性。
+Service不仅可以对外提供统一入口来访问内部的Pod（1 --> 2），而且还可以让内部的Pod访问其它Pod（3 --> 2）。
+
+1.6.2 Service YAML示例
+以下是一个Service的YAML文件内容实例：
+
+这里假设文件名为ng-svc.yaml
+
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: ngx-svc
+spec:
+  selector:
+    app: myng
+  ports:
+  - protocol: TCP
+    port: 8080  ##service的port
+    targetPort: 80  ##pod的port
+
+主要参数说明：
+
+apiVersion: v1 表示这是 Kubernetes API 的第一版，这个版本包含了 Service 资源类型。    
+kind: Service 指定了这个 YAML 文件是用来定义一个 Service 资源。
+metadata
+name: ngx-svc 这是该 Service 的名称，在 Kubernetes 集群内部必须是唯一的。
+spec (规格说明):
+selector:
+app: myng 这个选择器指定了这个 Service 会转发请求给所有标签为 app: myng 的 Pods。
+ports: 定义了服务端口配置的列表，每个项包含了服务的端口（port）、协议（protocol）和目标端口（targetPort）。
+protocol: TCP 指定了 Service 使用的协议，这里是 TCP。
+port: 8080 这是 Service 对外开放的端口。外部组件（无论是集群内部还是外部的）可以通过访问这个端口来与后端 Pods 通信。
+targetPort: 80 这是 Pods 内部的端口。当请求到达 Service 时，Service 会将这些请求转发到后端 Pods 的这个端口。
+
+
+1.6.3 Service的三种
+1）ClusterIP
+该方式为默认类型，即，不定义type字段时（如上面service的示例），就是该类型，它为 Service 在集群内部分配一个内部 IP 地址，使得服务可以被集群内的其他组件通过这个内部 IP 访问。
+
+这种类型使得服务仅在集群内部可访问。
+
+spec:
+  selector:
+    app: myng
+  type: ClusterIP
+  ports:
+  - protocol: TCP
+    port: 8080  ##service的port
+    targetPort: 80  ##pod的port
+
+2）NodePort
+如果想直接通过k8s节点的IP直接访问到service对应的资源，可以使用NodePort，Nodeport对应的端口范围:30000-32767。可以访问集群中任何一个Node的该端口都可以访问到内部Pod。
+spec:
+  selector:
+    app: myng
+  type: NodePort
+  ports:
+  - protocol: TCP
+    port: 8080  ##service的port
+    targetPort: 80  ##pod的port
+    nodePort: 30009  ##可以自定义，也可以不定义，它会自动获取一个端口
+
+3）LoadBlancer
+这种方式，需要配合公有云资源比如阿里云、亚马逊云来实现，这里需要一个公网IP作为入口，然后来负载均衡所有的Pod。
+spec:
+  selector:
+    app: myng
+  type: LoadBlancer
+  ports:
+  - protocol: TCP
+    port: 8080  ##service的port
+    targetPort: 80  ##pod的port
+
+
+1.6.4 Service的创建和删除
+使用YAML创建Service：
+kubectl apply -f ng-svc.yaml
+
+查看：
+kubectl get svc
+
+使用YAML删除Service：
+kubectl delete -f ng-svc.yaml

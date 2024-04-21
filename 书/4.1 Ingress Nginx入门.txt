@@ -1,0 +1,203 @@
+Ingress-nginx 这一项目的出现是顺应了云原生时代背景下容器编排平台 Kubernetes 发展的需求。随着 Kubernetes 逐渐成为容器化应用的标准部署和管理工具，服务网格和API管理的需求变得越来越重要。
+
+
+在Kubernetes 生态系统中，服务对外暴露的方式最初主要是通过 Service 资源对象来实现，但 Service 主要针对的是集群内部的服务发现和负载均衡，而对于集群外部的 HTTP(S) 请求路由、身份验证、SSL终止等功能的支持并不完善。
+
+
+于是，Kubernetes 引入了一个更高层次的抽象概念—— Ingress 资源对象，它为集群外部提供了统一的入口网关，允许开发者和运维人员轻松配置 HTTP 路由规则，以便将外部请求透明地分发至集群内的不同 Service。
+
+
+然而，Ingress 资源对象本身只是一种规范，它的功能实现需要借助于 Ingress Controller 这一组件。
+
+4.1.1 Kubernetes Ingress 概览
+Ingress-nginx项目就是在此背景下诞生的，它是由 Kubernetes 社区基于开源 Web 服务器 Nginx 开发的一款实现 Ingress 资源对象功能的控制器。
+Ingress-nginx 控制器监听集群中的 Ingress 对象变化，并将这些配置转换成实际的 Nginx 配置文件，从而利用 Nginx 的高度可定制性和高性能能力，实现服务的负载均衡、路由转发、SSL 卸载等一系列功能，大大简化了 Kubernetes 集群内外服务之间流量管理的复杂性。
+此外，Ingress-nginx 还通过集成 Lua 插件增强了功能，使之更适合于多种复杂的企业级应用场景。
+4.1.2 Ingress Controller 工作原理
+Ingress Controller 用于解析 Ingress 的转发规则。Ingress Controller 收到请求，匹配 Ingress 转发规则转发到后端 Service 所对应的 Pod，由 Pod 处理请求。Kubernetes 中 Service、Ingress 与 Ingress Controller 有着以下关系：
+Service 是后端真实服务的抽象，一个 Service 可以代表多个相同的后端服务。
+Ingress 是反向代理规则，用来规定 HTTP、HTTPS 请求应该被转发到哪个 Service 所对应的 Pod 上。
+Ingress Controller 是一个反向代理程序，负责解析 Ingress 的反向代理规则。如果 Ingress 有增删改的变动，Ingress Controller 会及时更新自己相应的转发规则，当 Ingress Controller 收到请求后就会根据这些规则将请求转发到对应 Service 的 Pod 上。
+Ingress Controller 通过 API Server 获取 Ingress 资源的变化，并动态地更新 Nginx 配置文件，实现 HTTP(S) 的负载均衡及路由转发。
+
+总结下：Kubernetes 的 Ingress 资源对象需要配合 Ingress Controller 才能实现外部流量的转发和路由。Ingress Controller 是 Ingress 资源的实际执行者，负责根据定义的路由规则配置网络代理。（Ingress / Ingress Controller千万不要弄混）
+4.1.3 Ingress-Nginx 安装与配置
+官方支持的版本数据：
+
+
+三种常用的部署模式：
+
+Deployment + LoadBalancer 模式的 service：
+用 Deployment 部署 igress-controller，创建一个 type 为 LoadBalancer 的 service 关联这组 pod。大部分公有云，都会为 LoadBalancer 的 service 自动创建一个负载均衡器，通常还绑定了公网地址。只要把域名解析指向改地址，就实现了集群服务的对外暴露。
+Deployment + NodePort 模式的 service：
+同样用 deployment 模式部署 ingress-controller，然后创建对应的 ingress svc，type 为 NodePort。这样，ingress 就会暴露在集群节点 ip 的特定端口上。由于 NodePort 暴露的端口是随机端口，一般会在前面再搭建一套负载均衡器来转发请求。改方式一般用于宿主机是相对固定的环境 ip 地址不变的场景。NodePort 方式暴露 ingress虽然简单方便，但是 NodePort 多了一层 NAT，在请求量级很大时可能对性能会有一定的影响。
+DaemonSet + HostNetwork(+nodeSelector)：
+用 DaemonSet 结合 nodeselector 来部署 ingress-controller 到特定的 Node 上，然后使用 HostNetwork 直接把该 pod 与宿主机 node 的网络打通，直接使用宿主机的 80/443 端口就能访问服务。这时，ingress-controller 所在的 node 机器就很类似传统架构的边缘节点，比如机房的入口 nginx 服务器。该方式整个请求链路最简单，性能相对 NodePort 模式更好。缺点是由于直接利用宿主机节点的网络和端口，一个 node 只能部署一个 ingress-controller pod。比较适合大并发的生产环境使用。
+本次实验使用第三种，DaemonSet + HostNetwork(+nodeSelector)，当前集群中已经部署了 MetalLB 作为 LoadBalancer 的技术支持！
+4.1.3.1 添加 ingress-nginx 官方 Helm 仓库
+# helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+"ingress-nginx" has been added to your repositories
+
+# helm repo update
+Hang tight while we grab the latest from your chart repositories...
+...Successfully got an update from the "ingress-nginx" chart repository
+Update Complete. ⎈Happy Helming!⎈
+4.1.3.2 下载 ingress-nginx 的 chart 包
+# cd /usr/local/src/
+
+# 查找ingress-nginx的chart包
+# helm search repo ingress-nginx
+NAME                       CHART VERSION APP VERSIONDESCRIPTION
+ingress-nginx/ingress-nginx4.9.1         1.9.6      Ingress controller for Kubernetes using NGINX a...
+
+# 下载
+# helm pull ingress-nginx/ingress-nginx --version 4.9.1
+
+# 解压
+# tar -zxvf ingress-nginx-4.9.1.tgz
+
+# 目录结构
+# cd ingress-nginx & ls
+CHANGELOG.md  Chart.yaml  ci  OWNERS  README.md  templates  values.yaml
+4.1.3.3 修改 values.yaml 文件
+修改 ingress-nginx-contorller 镜像仓库地址，默认 k8s.gcr.io 国内无法访问，大家可以修改为如下镜像地址（此镜像版本适用于 ingress-nginx 4.9.1 Charts）：
+
+ingress-nginx-contorller： registry.cn-hangzhou.aliyuncs.com/zhdya/ingress-controller:v1.9.6
+
+
+kube-webhook-certgen： registry.cn-hangzhou.aliyuncs.com/zhdya/kube-webhook-certgen:v20231226-1a7112e06
+
+
+镜像地址：略 dnsPolicy的值改为: ClusterFirstWithHostNet hostNetwork 的值改为： true kind类型更改为：DaemonSet 添加标签:     nodeSelector:       kubernetes.io/os: linux           ingress: "true"
+4.1.3.4 执行安装
+# 先创建一个名称空间
+# kubectl create ns ingress-nginx
+
+##刚刚设置的标签ingress=true，让 Pod 调度到指定的节点
+# kubectl label node node1 ingress=true
+# kubectl label node node2 ingress=true
+
+# 进入chart目录
+# cd /usr/local/src/ingress-nginx
+
+# helm安装，注意最后的点
+# helm install ingress-nginx -f values.yaml -n ingress-nginx .    
+NAME: ingress-nginx
+LAST DEPLOYED: Thu Mar 14 16:33:55 2024
+NAMESPACE: ingress-nginx
+STATUS: deployed
+REVISION: 1
+TEST SUITE: None
+...
+4.1.3.5 验证
+# kubectl get all -n ingress-nginx
+NAME                                 READY   STATUS    RESTARTS   AGE
+pod/ingress-nginx-controller-nldt4   1/1     Running   0          3m45s
+
+NAME                                         TYPE           CLUSTER-IP      EXTERNAL-IP     PORT(S)                      AGE
+service/ingress-nginx-controller             LoadBalancer   10.103.248.36   192.10.10.222   80:30318/TCP,443:30865/TCP   3m45s
+service/ingress-nginx-controller-admission   ClusterIP      10.104.51.205   <none>          443/TCP                      3m46s
+
+NAME                                      DESIRED   CURRENT   READY   UP-TO-DATE   AVAILABLE   NODE SELECTOR                         AGE
+daemonset.apps/ingress-nginx-controller   1         1         1       1            1           ingress=true,kubernetes.io/os=linux   3m45s
+如上虽然是 LoadBalancer 模式，EXTERNAL-IP 处的 pending 也不用担心，这是因为集群中没有LB的支持，所以没有进一步获取到 LB 分配的 IP，我们使用 NodePort 仍然可以使用！！！
+
+测试验证：
+
+通过访问 宿主机+30318 显示 nginx 页面, 则代表部署成功，此处的 30318 是如上的 nodeport 端口！
+
+
+
+
+4.1.3.6 测试 ingress-nginx
+创建后端的 nginx 的 Pod 和 Service:
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+ name: svc-demo
+spec:
+ replicas: 2
+ selector:
+   matchLabels:
+     app: myapp
+ template:
+   metadata:
+     labels:
+       app: myapp
+   spec:
+     containers:
+     - image: nginx:1.18.0
+       name: svc-demo
+       ports:
+       - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+ name: svc-demo
+spec:
+ selector:  
+   app: myapp
+ ports:
+ - targetPort: 80  # 后端Pod的端口
+   port: 80 # 服务要暴露的端口
+创建ingress 规则，ingress-myapp.yaml：
+
+注意：如有域名的小伙伴，更换为自己的域名，域名解析指到 nodeport 的任意节点即可；
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+ name: myapp-ing
+ namespace: default
+spec:
+ ingressClassName: nginx
+ rules:
+ - host: nginx.kubernets.cn
+   http:
+     paths:
+     - backend:
+         service:
+           name: svc-demo
+           port:
+             number: 80
+       path: /
+       pathType: Prefix
+测试验证：
+
+# kubectl get ing
+NAME                 CLASS   HOSTS                  ADDRESS          PORTS   AGE
+myapp-ing            nginx   nginx.kubernets.cn     192.10.192.222   80      30s
+
+##如果没有域名的小伙，也可以使用如上域名，并绑定hosts到nodeport所在的节点，例如：
+192.10.192.31 nginx.kubernets.cn
+
+# # curl nginx.kubernets.cn
+<!DOCTYPE html>
+<html>
+<head>
+<title>Welcome to nginx!</title>
+<style>
+   body {
+       width: 35em;
+       margin: 0 auto;
+       font-family: Tahoma, Verdana, Arial, sans-serif;
+   }
+</style>
+</head>
+<body>
+<h1>Welcome to nginx!</h1>
+<p>If you see this page, the nginx web server is successfully installed and
+working. Further configuration is required.</p>
+
+<p>For online documentation and support please refer to
+<a href="http://nginx.org/">nginx.org</a>.<br/>
+Commercial support is available at
+<a href="http://nginx.com/">nginx.com</a>.</p>
+
+<p><em>Thank you for using nginx.</em></p>
+</body>
+</html>
+4.1.4 总结与展望
+Ingress-Nginx 凭借其高度的灵活性和强大的功能集，成为了 Kubernetes 用户首选的 Ingress 解决方案。在未来，随着Kubernetes生态的不断演进和扩展，Ingress-Nginx 将持续创新和完善，以满足日益增长的服务治理需求，助力企业构建更加健壮、高效的云原生服务体系。

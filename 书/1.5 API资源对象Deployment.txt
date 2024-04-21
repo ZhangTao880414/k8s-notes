@@ -1,0 +1,77 @@
+1.5.1 Deployment概述
+自k8s的1.2版本开始，引入了deployment控制器，它并不直接管理pod，而是通过管理replicaset来间接管理pod，即：deployment管理replicaset，replicaset管理pod。
+
+Deployment的主要功能有：
+自动化部署：Deployment 能够自动化地创建和管理应用的副本，确保任何时候都有指定数量的 Pod 副本运行。
+滚动更新：当应用的配置或者镜像更新时，Deployment 可以逐步替换旧的 Pod 实例，以新的配置或镜像启动新实例。这样的滚动更新可以确保应用的更新过程不中断服务。
+回滚：如果新版本部署后存在问题，Deployment 可以将应用回滚到之前的版本，确保服务的稳定性。
+扩展和缩减： 可以通过修改 Deployment 中定义的副本数来实现应用的扩展和缩减，适应不同的负载需求。
+自我修复： 如果 Pod 崩溃或被删除，Deployment 会自动替换它，确保配置中指定数量的副本始终运行。
+版本记录和管理： Deployment 支持记录应用的版本历史，方便查看历史版本并进行版本切换。
+
+1.5.2 Deployment YAML示例
+以下是一个Deployment的YAML文件内容实例：
+
+这里假设文件名为ng-deploy.yaml
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: myng
+  name: ng-deploy
+spec:
+  replicas: 2 ##副本数
+  selector:
+    matchLabels:
+      app: myng
+  template:
+    metadata:
+      labels:
+        app: myng
+    spec:
+      containers:
+        - name: myng
+          image: nginx:1.23.2
+          ports:
+          - name: myng-port
+            containerPort: 80
+
+说明：
+
+此YAML文件定义了一个名为ng-deploy的Deployment，它将创建2个副本的Pods，每个Pod中运行一个名为myng的容器，该容器使用的镜像为nginx:1.23.2，容器暴漏的端口为80.
+
+
+
+主要参数说明：
+apiVersion: 指定 Kubernetes API 版本，对于 Deployment，通常是 apps/v1。
+kind: 指定资源类型，这里是 Deployment。
+metadata: 包含 Deployment 的元数据，如 name 和 labels。
+name: Deployment 的名称。
+labels: 设置一组标签，用于组织和选择资源。
+spec: 描述了 Deployment 的期望状态。
+metadata: 包含 Pod 的元数据，如 labels。
+spec: 描述了 Pod 的规格，包括容器的定义。
+name: 容器的名称。
+image: 容器的镜像。
+ports: 容器需要暴露的端口列表。
+containers: 定义 Pod 中的容器列表。
+matchLabels: 选择器，用于查找与之匹配的 Pods 标签。
+replicas: 指定应运行的 Pod 副本数量。
+selector: 用于选择与此 Deployment 匹配的 Pod。通常基于标签来选择。
+template: 定义 Pods 的模板。
+1.5.3 Deployment的创建和删除
+使用YAML创建Deployment：
+kubectl apply -f ng-deploy.yaml
+
+查看Deployment和Pod：
+kubectl get deploy 
+kubectl get pod
+
+查看Pod分配到哪个节点上
+kubectl get pod -o wide
+
+
+使用YAML删除Deployment
+
+kubectl delete  -f  ng-deploy.yaml
